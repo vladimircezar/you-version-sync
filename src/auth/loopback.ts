@@ -209,7 +209,15 @@ export async function startLoopbackReceiver(options: LoopbackOptions): Promise<L
   });
 
   timer = setTimeout(() => {
-    fail?.(new Error("Timed out waiting for the YouVersion sign-in to complete."));
+    fail?.(
+      new Error(
+        "Timed out waiting for the YouVersion sign-in to complete. If the browser showed " +
+          '"redirect_uri does not match registered callback URL", the callback URL registered ' +
+          "for your app does not match this plugin's redirect URI exactly - copy it from " +
+          "settings and re-register it. YouVersion rejects that before redirecting, so the " +
+          "plugin never hears back and can only report a timeout.",
+      ),
+    );
   }, options.timeoutMs);
 
   // The caller always awaits `result`; make sure an early rejection is observed.

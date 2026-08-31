@@ -89,7 +89,7 @@ That produces `main.js` in the repository root.
 
 ```bash
 mkdir -p "/path/to/YourVault/.obsidian/plugins/youversion-sync"
-cp main.js manifest.json "/path/to/YourVault/.obsidian/plugins/youversion-sync/"
+cp main.js manifest.json styles.css "/path/to/YourVault/.obsidian/plugins/youversion-sync/"
 ```
 
 Then in Obsidian: **Settings → Community plugins → Installed plugins** → reload, and enable
@@ -111,8 +111,11 @@ You need your own YouVersion developer App Key. There is no shared key, and ther
    http://localhost:51789/callback
    ```
 
-   It must match byte-for-byte. If port 51789 is taken on your machine, change it in the plugin's
-   settings and register the matching URL instead.
+   It must match character for character. `127.0.0.1` instead of `localhost`, a trailing slash,
+   `https`, or a missing `/callback` will all fail with
+   `redirect_uri does not match registered callback URL`. The plugin's settings show the exact
+   string with a **Copy** button — use that rather than retyping it. If port 51789 is taken on
+   your machine, change it in settings first and register the URI it then shows.
 4. Copy the **App Key**.
 5. In Obsidian: **Settings → YouVersion Sync**, paste the App Key.
 6. Run **YouVersion Sync: Connect account** (or press Connect in settings).

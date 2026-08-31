@@ -126,7 +126,7 @@ grep -rn "app_key\|appKey" tests/ | grep -v "test-app-key\|app-key-123\|opts.app
 ## 10. Release
 
 - [ ] Tag matches the manifest version exactly, with **no** `v` prefix
-- [ ] Release contains `main.js`, `manifest.json`, and `styles.css` if present
+- [ ] Release contains `main.js`, `manifest.json` and `styles.css`
 - [ ] Attached as individual files, not only a zip
 - [ ] Release notes state what is and is not supported
 

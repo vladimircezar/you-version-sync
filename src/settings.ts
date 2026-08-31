@@ -264,10 +264,29 @@ export class YouVersionSettingTab extends PluginSettingTab {
       );
 
     new Setting(el)
-      .setName("Callback port")
+      .setName("Redirect URI")
       .setDesc(
-        `Redirect URI: ${redirectUri(this.settings)} - register this exact URL in the Portal.`,
+        "Register this exact URL as your app's callback URL in the Platform Portal. It must " +
+          "match character for character - not 127.0.0.1, no trailing slash, no https.",
       )
+      .addText((text) => {
+        text.setValue(redirectUri(this.settings)).setDisabled(true);
+        text.inputEl.addClass("youversion-sync-redirect-uri");
+        return text;
+      })
+      .addButton((btn) =>
+        btn
+          .setButtonText("Copy")
+          .setCta()
+          .onClick(async () => {
+            await navigator.clipboard.writeText(redirectUri(this.settings));
+            new Notice("Redirect URI copied. Paste it into your app's callback URL.");
+          }),
+      );
+
+    new Setting(el)
+      .setName("Callback port")
+      .setDesc("Change this only if the port is already in use, then re-register the URI above.")
       .addText((text) =>
         text.setValue(String(this.settings.callbackPort)).onChange(async (value) => {
           this.settings.callbackPort = clampPortInput(value, this.settings.callbackPort);

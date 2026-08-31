@@ -1,0 +1,8 @@
+/* YouVersion Sync */
+
+/* The redirect URI must be read and copied exactly, so give it room and a
+   monospace face rather than truncating it in a default-width input. */
+.youversion-sync-redirect-uri {
+  width: 22em;
+  font-family: var(--font-monospace);
+}
