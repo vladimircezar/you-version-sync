@@ -65,7 +65,7 @@ export const DEFAULT_SETTINGS: YouVersionSyncSettings = {
 
   importHighlights: true,
 
-  scanScope: "new_testament",
+  scanScope: "whole",
   scanBooks: [],
 
   highlightOrganization: "verse",
@@ -405,17 +405,19 @@ export class YouVersionSettingTab extends PluginSettingTab {
       cls: "setting-item-description",
       text:
         "The API can only answer 'is this passage highlighted?', so a sync walks the chapters in " +
-        "the scope below. A narrower scope means a much faster, lighter sync.",
+        "the scope below. Narrowing the scope makes a sync faster, but highlights outside it are " +
+        "not imported at all - they are simply never looked for. Leave it on the whole Bible " +
+        "unless you have a reason not to.",
     });
 
     new Setting(el)
       .setName("Scan scope")
-      .setDesc("How much of the Bible each sync walks.")
+      .setDesc("How much of the Bible each sync walks. Anything outside it is not imported.")
       .addDropdown((dd) =>
         dd
-          .addOption("new_testament", "New Testament (~260 chapters)")
-          .addOption("old_testament", "Old Testament (~929 chapters)")
-          .addOption("whole", "Whole Bible (~1,189 chapters)")
+          .addOption("whole", "Whole Bible - complete (~1,189 chapters, a few minutes)")
+          .addOption("new_testament", "New Testament only (~260 chapters)")
+          .addOption("old_testament", "Old Testament only (~929 chapters)")
           .addOption("books", "Selected books only")
           .setValue(this.settings.scanScope)
           .onChange(async (value) => {

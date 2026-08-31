@@ -148,18 +148,24 @@ the flow ends or times out. Details in [`docs/architecture.md`](docs/architectur
 | `YouVersion Sync: Disconnect account` | Discards tokens locally |
 | `YouVersion Sync: Cancel running sync` | Stops a scan; progress is kept |
 
-### Pick a scan scope first
+### Scan scope
 
-This is the setting that matters most.
+| Scope | Requests per sync | Time |
+| --- | --- | --- |
+| **Whole Bible** (default) | ~1,189 | a few minutes |
+| New Testament only | ~260 | about a minute |
+| Old Testament only | ~929 | a few minutes |
+| Selected books | a few to a few dozen | seconds |
 
-| Scope | Requests per sync |
-| --- | --- |
-| Selected books | a few to a few dozen |
-| **New Testament** (default) | ~260 |
-| Old Testament | ~929 |
-| Whole Bible | ~1,189 |
+**The default scans everything, on purpose.** A narrower scope is faster, but highlights outside it
+are not imported — they are never even looked for. A sync that silently omits most of your
+highlights is worse than a slow one, so completeness is the default and speed is opt-in.
 
-Start narrow. Widen it once you have seen what the plugin does.
+If you do narrow it, the plugin says so after every sync and puts a warning at the top of
+`Dashboard.md`, so a partial view is never mistaken for "you have no highlights there".
+
+A full scan is resumable, cancellable, and shows progress, so the first run taking a few minutes
+costs you nothing but waiting.
 
 Automatic sync is **off** by default, and cannot be set below 60 minutes when enabled. A sync is a
 few hundred HTTP requests; running it every five minutes would be abusive to a free API.

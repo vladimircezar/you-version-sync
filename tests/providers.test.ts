@@ -8,7 +8,7 @@ import { EXPERIMENTAL_STATUS, ExperimentalProvider } from "../src/providers/expe
 import { buildAuthorizeUrl } from "../src/auth/oauth";
 import { HIGHLIGHTS_PERMISSION, SUPPORTED_SCOPES } from "../src/constants";
 import { clampInterval, normalizeSettings, redirectUri } from "../src/settings";
-import { MIN_AUTO_SYNC_MINUTES } from "../src/constants";
+import { MIN_AUTO_SYNC_MINUTES, scanScopeLabel } from "../src/constants";
 
 describe("capability matrix", () => {
   it("marks highlights as the only available type", () => {
@@ -203,5 +203,19 @@ describe("permission gating", () => {
     const availability = await provider.availability();
     expect(availability.usable).toBe(true);
     expect(availability.reason).toMatch(/did not report/);
+  });
+});
+
+describe("scan scope defaults and labels", () => {
+  it("defaults to a complete scan, so nothing is silently skipped", () => {
+    expect(normalizeSettings({}).scanScope).toBe("whole");
+  });
+
+  it("labels every scope in plain language", () => {
+    expect(scanScopeLabel("whole")).toBe("the whole Bible");
+    expect(scanScopeLabel("new_testament")).toContain("New Testament");
+    expect(scanScopeLabel("old_testament")).toContain("Old Testament");
+    expect(scanScopeLabel("books", ["JHN", "ROM"])).toContain("JHN, ROM");
+    expect(scanScopeLabel("books", [])).toContain("no books selected");
   });
 });

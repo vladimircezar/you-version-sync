@@ -15,7 +15,7 @@ import {
   normalizeSettings,
   redirectUri,
 } from "./settings";
-import { AUTH_ENDPOINTS, HIGHLIGHTS_PERMISSION } from "./constants";
+import { AUTH_ENDPOINTS, HIGHLIGHTS_PERMISSION, scanScopeLabel } from "./constants";
 import { HttpRequest, HttpResponse, ResilientHttp, Transport } from "./sync/http";
 import { OAuthClient, buildAuthorizeUrl } from "./auth/oauth";
 import { PersistedTokens, TokenStore } from "./auth/tokenStore";
@@ -367,11 +367,18 @@ export default class YouVersionSyncPlugin extends Plugin {
       await this.savePluginData();
 
       notice.hide();
+      const scope = scanScopeLabel(this.settings.scanScope, this.settings.scanBooks);
+      const partial = this.settings.scanScope !== "whole";
       new Notice(
         `YouVersion Sync ${summary.cancelled ? "cancelled" : "finished"}: ` +
           `${summary.created} created, ${summary.updated} updated, ${summary.unchanged} unchanged, ` +
-          `${summary.conflicted} conflicts, ${summary.failed} failed.`,
-        8000,
+          `${summary.conflicted} conflicts, ${summary.failed} failed.\n` +
+          `Scanned ${scope}.` +
+          (partial
+            ? " Highlights outside that scope were not looked for - widen the scan scope in " +
+              "settings to import them."
+            : ""),
+        partial ? 12000 : 8000,
       );
       this.logger.info(
         `Sync ${summary.cancelled ? "cancelled" : "complete"} (${trigger}): ` +
@@ -456,6 +463,8 @@ export default class YouVersionSyncPlugin extends Plugin {
         destinationRoot: this.settings.destinationRoot,
         bibleId: this.settings.bibleId,
         bibleVersion: this.settings.bibleAbbreviation,
+        scanScope: scanScopeLabel(this.settings.scanScope, this.settings.scanBooks),
+        scopeIsPartial: this.settings.scanScope !== "whole",
       };
       const result = await rebuildAllIndexes(this.io, this.settings.destinationRoot, ctx);
       if (!options.quiet) new Notice(`Rebuilt indexes for ${result.highlights} highlights.`);

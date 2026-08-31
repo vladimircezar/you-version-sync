@@ -198,3 +198,29 @@ describe("rebuilding indexes", () => {
     expect(second.highlights).toBe(2);
   });
 });
+
+describe("scan scope visibility", () => {
+  it("states the scope on the dashboard", () => {
+    const md = renderDashboard([], { ...DASH_CTX, scanScope: "the whole Bible" });
+    expect(md).toContain("**Scan scope:** the whole Bible");
+  });
+
+  it("warns loudly when the scan was partial, so absence is not mistaken for zero", () => {
+    const md = renderDashboard([], {
+      ...DASH_CTX,
+      scanScope: "the New Testament only",
+      scopeIsPartial: true,
+    });
+    expect(md).toContain("This is a partial view");
+    expect(md).toContain("their absence below does not mean you have none");
+  });
+
+  it("does not warn when the whole Bible was scanned", () => {
+    const md = renderDashboard([], {
+      ...DASH_CTX,
+      scanScope: "the whole Bible",
+      scopeIsPartial: false,
+    });
+    expect(md).not.toContain("partial view");
+  });
+});

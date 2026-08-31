@@ -38,3 +38,19 @@ export const MIN_AUTO_SYNC_MINUTES = 60;
 export function bibleComUrl(bibleId: number, usfm: string): string {
   return `https://www.bible.com/bible/${bibleId}/${usfm}`;
 }
+
+/** Human-readable name for a scan scope, for notices and generated notes. */
+export function scanScopeLabel(scope: string, books: readonly string[] = []): string {
+  switch (scope) {
+    case "whole":
+      return "the whole Bible";
+    case "new_testament":
+      return "the New Testament only";
+    case "old_testament":
+      return "the Old Testament only";
+    case "books":
+      return books.length > 0 ? `these books only: ${books.join(", ")}` : "no books selected";
+    default:
+      return scope;
+  }
+}

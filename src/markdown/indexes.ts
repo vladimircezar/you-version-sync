@@ -159,6 +159,10 @@ export interface DashboardContext {
   destinationRoot: string;
   bibleId: number;
   bibleVersion: string;
+  /** Human-readable scan scope, e.g. "the whole Bible". */
+  scanScope?: string;
+  /** True when the scan deliberately skipped part of the Bible. */
+  scopeIsPartial?: boolean;
 }
 
 export function renderDashboard(entries: IndexEntry[], ctx: DashboardContext): string {
@@ -188,8 +192,18 @@ export function renderDashboard(entries: IndexEntry[], ctx: DashboardContext): s
     `- **Source:** ${ctx.providerName}`,
     `- **Bible version:** ${ctx.bibleVersion || ctx.bibleId}`,
     `- **Last successful sync:** ${ctx.lastSuccessfulSyncAt ?? "never"}`,
+    `- **Scan scope:** ${ctx.scanScope ?? "unknown"}`,
     "",
   ];
+
+  if (ctx.scopeIsPartial) {
+    lines.push(
+      "> [!warning] This is a partial view",
+      `> Sync only looked at ${ctx.scanScope}. Highlights anywhere else were never requested, so`,
+      "> their absence below does not mean you have none. Widen the scan scope in settings.",
+      "",
+    );
+  }
 
   if (ctx.lastSummary) {
     const s = ctx.lastSummary;
