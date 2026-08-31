@@ -105,13 +105,24 @@ export class OfficialApiProvider implements Provider, HighlightSource {
     if (!this.options.tokens.isConnected()) {
       return { usable: false, reason: "Not connected to a YouVersion account." };
     }
-    if (!this.options.tokens.hasPermission(HIGHLIGHTS_PERMISSION)) {
+    if (this.options.tokens.hasPermission(HIGHLIGHTS_PERMISSION)) {
+      return { usable: true, reason: "Ready." };
+    }
+    if (this.options.tokens.permissionsKnown()) {
       return {
         usable: false,
-        reason: "The highlights permission was not granted. Reconnect and approve it.",
+        reason:
+          "YouVersion reported that the highlights permission was not granted. Reconnect and " +
+          "approve it, and check that your app requests the highlights permission in the " +
+          "Platform Portal.",
       };
     }
-    return { usable: true, reason: "Ready." };
+    // Sign-in told us nothing about permissions. Do not infer a denial from
+    // silence - attempt the sync and let a 403 from the API be the answer.
+    return {
+      usable: true,
+      reason: "Ready. YouVersion did not report a permission list; the API will be the authority.",
+    };
   }
 
   highlights(): HighlightSource {

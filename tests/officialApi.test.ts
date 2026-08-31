@@ -103,13 +103,26 @@ describe("availability", () => {
     });
   });
 
-  it("refuses when the highlights permission was not granted", async () => {
+  it("refuses when YouVersion reported that highlights were not granted", async () => {
     const { provider, tokens } = makeProvider(base);
-    await connect(tokens, []);
+    await tokens.store({
+      accessToken: "a",
+      refreshToken: "r",
+      expiresAt: Date.now() + 3_600_000,
+      grantedPermissions: [],
+      permissionsReported: true,
+    });
     await expect(provider.availability()).resolves.toMatchObject({
       usable: false,
-      reason: expect.stringContaining("highlights permission"),
+      reason: expect.stringContaining("not granted"),
     });
+  });
+
+  it("proceeds when YouVersion reported no permission list at all", async () => {
+    // Silence is not a denial: attempt the sync and let a 403 be the answer.
+    const { provider, tokens } = makeProvider(base);
+    await connect(tokens, []);
+    await expect(provider.availability()).resolves.toMatchObject({ usable: true });
   });
 });
 

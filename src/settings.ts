@@ -192,11 +192,15 @@ export class YouVersionSettingTab extends PluginSettingTab {
     // top of the tab without one.
     const connected = this.plugin.tokens.isConnected();
     const granted = this.plugin.tokens.grantedPermissions();
-    const status = connected
-      ? granted.includes("highlights")
+    const status = !connected
+      ? "Not connected."
+      : granted.includes("highlights")
         ? "Connected. The highlights permission has been granted."
-        : "Connected, but the highlights permission was not granted. Reconnect and approve it to sync."
-      : "Not connected.";
+        : this.plugin.tokens.permissionsKnown()
+          ? "Connected, but YouVersion reported that the highlights permission was not granted. " +
+            "Check your app's permissions in the Platform Portal, then reconnect."
+          : "Connected. YouVersion did not report which permissions were granted; the first sync " +
+            "will confirm.";
 
     const setting = new Setting(el).setName("Status").setDesc(status);
 

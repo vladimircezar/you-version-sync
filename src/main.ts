@@ -232,6 +232,7 @@ export default class YouVersionSyncPlugin extends Plugin {
         pkce.verifier,
         callback.grantedPermissions,
       );
+      tokenSet.permissionsReported = callback.permissionsReported;
 
       // The permission list on the callback is authoritative; fall back to
       // querying it if the redirect omitted the parameter entirely.
@@ -242,13 +243,22 @@ export default class YouVersionSyncPlugin extends Plugin {
       await this.tokens.store(tokenSet);
       await this.captureAccountName(nonce);
 
-      if (!this.tokens.hasPermission(HIGHLIGHTS_PERMISSION)) {
+      if (this.tokens.hasPermission(HIGHLIGHTS_PERMISSION)) {
+        new Notice("Connected to YouVersion. The highlights permission was granted.", 5000);
+      } else if (callback.permissionsReported) {
         new Notice(
-          "Connected, but the highlights permission was not granted. Reconnect and approve it to sync.",
-          12000,
+          "Connected, but YouVersion reported that the highlights permission was not granted. " +
+            "Check that your app requests the highlights permission in the Platform Portal, " +
+            "then reconnect and approve it.",
+          15000,
         );
       } else {
-        new Notice("Connected to YouVersion.", 5000);
+        // Silence is not a denial. Say what we know and let the sync proceed.
+        new Notice(
+          "Connected to YouVersion. It did not report which permissions were granted, so the " +
+            "first sync will find out. If highlights were not approved, the sync will say so.",
+          12000,
+        );
       }
 
       this.logger.info("OAuth connect completed.");

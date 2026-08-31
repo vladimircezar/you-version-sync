@@ -27,6 +27,11 @@ export interface TokenSet {
   expiresAt: number;
   /** Permissions YouVersion actually granted, e.g. `["highlights"]`. */
   grantedPermissions: string[];
+  /**
+   * Whether YouVersion reported a permission list at all during sign-in.
+   * `false` means "not told", which must never be read as "denied".
+   */
+  permissionsReported?: boolean;
   scope?: string;
 }
 

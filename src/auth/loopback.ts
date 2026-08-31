@@ -17,7 +17,14 @@ import { redactError } from "../security/redact";
 export interface LoopbackResult {
   code: string;
   state: string;
+  /** Union of `granted_permissions` seen across both callback hops. */
   grantedPermissions: string[];
+  /**
+   * Whether YouVersion reported a permission list at all. An absent parameter
+   * is *not* the same as an empty one: absent means we were told nothing, and
+   * the caller must not infer a denial from it.
+   */
+  permissionsReported: boolean;
 }
 
 export interface LoopbackOptions {
@@ -86,6 +93,22 @@ export async function startLoopbackReceiver(options: LoopbackOptions): Promise<L
     fail = reject;
   });
 
+  // `granted_permissions` is documented on the first (state-only) callback and
+  // is only "optional" on the second, so it must be collected from both.
+  const granted = new Set<string>();
+  let permissionsReported = false;
+
+  const collectPermissions = (url: URL): void => {
+    const raw = url.searchParams.get("granted_permissions");
+    if (raw === null) return;
+    permissionsReported = true;
+    for (const key of raw
+      .split(",")
+      .map((k) => k.trim())
+      .filter(Boolean))
+      granted.add(key);
+  };
+
   let server: Server | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
@@ -146,8 +169,11 @@ export async function startLoopbackReceiver(options: LoopbackOptions): Promise<L
       return;
     }
 
+    collectPermissions(url);
+
     if (!code) {
-      // First hop: state-only. Replay `state` alone via a top-level navigation.
+      // First hop: state-only, but it may already carry granted_permissions -
+      // which is why they are collected above, before the redirect.
       const replay = new URL(options.replayEndpoint);
       replay.searchParams.set("state", state);
       res.writeHead(302, { Location: replay.toString() });
@@ -156,14 +182,9 @@ export async function startLoopbackReceiver(options: LoopbackOptions): Promise<L
     }
 
     // Second hop: the authorization code is here.
-    const granted = (url.searchParams.get("granted_permissions") ?? "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(OK_PAGE("Connected to YouVersion", "You can close this tab and return to Obsidian."));
-    settle?.({ code, state, grantedPermissions: granted });
+    settle?.({ code, state, grantedPermissions: [...granted], permissionsReported });
   };
 
   server = http.createServer(handler);

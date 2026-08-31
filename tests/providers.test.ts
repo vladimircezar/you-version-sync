@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { TokenStore } from "../src/auth/tokenStore";
+import { OfficialApiProvider } from "../src/providers/officialApi";
+import { ResilientHttp } from "../src/sync/http";
 import { CAPABILITIES, capabilityFor, unavailableTypes } from "../src/providers/capabilities";
 import { NO_EXPORT_MESSAGE, UserExportProvider } from "../src/providers/userExport";
 import { EXPERIMENTAL_STATUS, ExperimentalProvider } from "../src/providers/experimental";
@@ -149,5 +152,56 @@ describe("settings normalisation", () => {
     expect(redirectUri(normalizeSettings({ callbackPort: 51789 } as never))).toBe(
       "http://localhost:51789/callback",
     );
+  });
+});
+
+describe("permission gating", () => {
+  function providerWith(grantedPermissions: string[], permissionsReported: boolean | undefined) {
+    const tokens = new TokenStore({
+      persistence: "session",
+      save: async () => undefined,
+      load: async () => null,
+    });
+    const stored = tokens.store({
+      accessToken: "a",
+      refreshToken: "r",
+      expiresAt: Date.now() + 3_600_000,
+      grantedPermissions,
+      permissionsReported,
+    });
+    const provider = new OfficialApiProvider({
+      http: new ResilientHttp({
+        transport: async () => ({ status: 200, headers: {}, text: "{}" }),
+      }),
+      oauth: {} as never,
+      tokens,
+      appKey: "k",
+      bibleId: 3034,
+      scanScope: { scope: "whole", books: [] },
+      downloadVerseText: false,
+    });
+    return { provider, ready: stored };
+  }
+
+  it("is usable when the highlights permission was granted", async () => {
+    const { provider, ready } = providerWith(["highlights"], true);
+    await ready;
+    await expect(provider.availability()).resolves.toMatchObject({ usable: true });
+  });
+
+  it("blocks only when YouVersion actually reported a denial", async () => {
+    const { provider, ready } = providerWith([], true);
+    await ready;
+    const availability = await provider.availability();
+    expect(availability.usable).toBe(false);
+    expect(availability.reason).toMatch(/not granted/);
+  });
+
+  it("does NOT block when YouVersion reported nothing - silence is not denial", async () => {
+    const { provider, ready } = providerWith([], undefined);
+    await ready;
+    const availability = await provider.availability();
+    expect(availability.usable).toBe(true);
+    expect(availability.reason).toMatch(/did not report/);
   });
 });

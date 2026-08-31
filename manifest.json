@@ -1,7 +1,7 @@
 {
   "id": "youversion-sync",
   "name": "YouVersion Sync",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "minAppVersion": "1.6.6",
   "description": "Sync your YouVersion Bible highlights into your vault as Markdown notes with stable IDs. Read-only and incremental, and it never overwrites your own writing. Requires a free YouVersion developer App Key. Desktop only.",
   "author": "YouVersion Sync contributors",

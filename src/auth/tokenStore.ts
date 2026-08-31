@@ -79,6 +79,15 @@ export class TokenStore {
     return this.grantedPermissions().includes(permission);
   }
 
+  /**
+   * Whether sign-in told us anything about permissions. When it did not, the
+   * plugin must attempt the request and let the API answer, rather than
+   * blocking the user on a guess.
+   */
+  permissionsKnown(): boolean {
+    return this.tokens?.permissionsReported === true;
+  }
+
   /** Expiry as an ISO string, for diagnostics. Never exposes the token itself. */
   expiresAtIso(): string | null {
     return this.tokens ? new Date(this.tokens.expiresAt).toISOString() : null;

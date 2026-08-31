@@ -92,6 +92,7 @@ describe("the three-hop flow", () => {
       code: "AUTH_CODE",
       state: STATE,
       grantedPermissions: ["highlights"],
+      permissionsReported: true,
     });
   });
 
@@ -117,6 +118,67 @@ describe("the three-hop flow", () => {
     await hit(port, `?code=C&state=${STATE}&granted_permissions=highlights,%20other`);
     await expect(handle.result).resolves.toMatchObject({
       grantedPermissions: ["highlights", "other"],
+    });
+  });
+});
+
+describe("granted_permissions", () => {
+  // Regression: the docs show granted_permissions arriving on the FIRST
+  // (state-only) callback, and only "optional" on the second. The receiver
+  // originally read it on hop 2 alone, so a real grant was silently dropped
+  // and the plugin told the user the permission had been denied.
+  it("captures permissions delivered on the first hop only", async () => {
+    const port = await freePort();
+    const handle = await start(port);
+
+    await hit(port, `?state=${STATE}&granted_permissions=highlights`);
+    await hit(port, `?code=CODE&state=${STATE}`); // hop 2 carries none
+
+    await expect(handle.result).resolves.toMatchObject({
+      grantedPermissions: ["highlights"],
+      permissionsReported: true,
+    });
+  });
+
+  it("captures permissions delivered on the second hop only", async () => {
+    const port = await freePort();
+    const handle = await start(port);
+
+    await hit(port, `?state=${STATE}`);
+    await hit(port, `?code=CODE&state=${STATE}&granted_permissions=highlights`);
+
+    await expect(handle.result).resolves.toMatchObject({
+      grantedPermissions: ["highlights"],
+      permissionsReported: true,
+    });
+  });
+
+  it("unions permissions across both hops without duplicating", async () => {
+    const port = await freePort();
+    const handle = await start(port);
+
+    await hit(port, `?state=${STATE}&granted_permissions=highlights`);
+    await hit(port, `?code=CODE&state=${STATE}&granted_permissions=highlights,extra`);
+
+    const result = await handle.result;
+    expect([...result.grantedPermissions].sort()).toEqual(["extra", "highlights"]);
+  });
+
+  it("distinguishes an empty list (told: none) from an absent one (not told)", async () => {
+    const emptyPort = await freePort();
+    const empty = await start(emptyPort);
+    await hit(emptyPort, `?code=C&state=${STATE}&granted_permissions=`);
+    await expect(empty.result).resolves.toMatchObject({
+      grantedPermissions: [],
+      permissionsReported: true,
+    });
+
+    const absentPort = await freePort();
+    const absent = await start(absentPort);
+    await hit(absentPort, `?code=C&state=${STATE}`);
+    await expect(absent.result).resolves.toMatchObject({
+      grantedPermissions: [],
+      permissionsReported: false,
     });
   });
 });
