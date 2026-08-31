@@ -541,7 +541,7 @@ export default class YouVersionSyncPlugin extends Plugin {
    * documented, which need opposite fixes.
    */
   async diagnoseHighlights(): Promise<void> {
-    const provider = this.buildProvider();
+    const provider = this.buildProvider({ fastFail: true });
     const availability = await provider.availability();
     if (!this.tokens.isConnected()) {
       new Notice(`YouVersion Sync: ${availability.reason}`, 10000);
@@ -556,13 +556,23 @@ export default class YouVersionSyncPlugin extends Plugin {
       "JHN.3.16",
       async (reference) => {
         const notice = new Notice("Probing highlight access...", 0);
+        const controller = new AbortController();
+        // Never let a diagnostic run unbounded, whatever the network does.
+        const guard = window.setTimeout(() => controller.abort(), 60_000);
         try {
-          const report = await probeHighlightAccess(provider, reference, this.settings.bibleId);
+          const report = await probeHighlightAccess(provider, reference, this.settings.bibleId, {
+            ctx: { signal: controller.signal },
+            onProgress: (done, total, label) => {
+              notice.setMessage(`Probing highlight access: ${label} (${done + 1}/${total})`);
+            },
+          });
+          window.clearTimeout(guard);
           notice.hide();
           const text = formatProbeReport(report);
           this.logger.info(`Probe conclusion: ${report.conclusion}`);
           new ResultModal(this.app, "Highlight access probe", text).open();
         } catch (err) {
+          window.clearTimeout(guard);
           notice.hide();
           new Notice(`YouVersion Sync: ${redactError(err)}`, 12000);
         }
@@ -627,9 +637,20 @@ export default class YouVersionSyncPlugin extends Plugin {
     return { appKey: this.settings.appKey, redirectUri: redirectUri(this.settings) };
   }
 
-  private buildProvider(): OfficialApiProvider {
+  private buildProvider(options: { fastFail?: boolean } = {}): OfficialApiProvider {
+    // Sync retries hard because it is long-running and unattended. A probe is
+    // interactive: one attempt, short backoff, so a bad version costs a moment
+    // rather than a minute.
+    const http = options.fastFail
+      ? new ResilientHttp({
+          transport: obsidianTransport,
+          policy: { maxAttempts: 1, baseDelayMs: 200, maxDelayMs: 1000, minIntervalMs: 60 },
+          onAttempt: (info) => this.logger.recordRequest(info),
+        })
+      : this.http;
+
     return new OfficialApiProvider({
-      http: this.http,
+      http,
       oauth: this.oauth,
       tokens: this.tokens,
       appKey: this.settings.appKey,

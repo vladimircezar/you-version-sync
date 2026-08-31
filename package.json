@@ -1,6 +1,6 @@
 {
   "name": "obsidian-youversion-sync",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Obsidian plugin that imports your YouVersion Bible highlights into your vault as durable Markdown.",
   "main": "main.js",
   "private": true,

@@ -50,6 +50,13 @@ export interface ProbeReport {
 /** How many versions to sweep. Each is one request; keep it civil. */
 const MAX_VERSIONS = 30;
 
+/**
+ * Hard ceiling on the whole sweep. A probe is an interactive diagnostic - it
+ * must come back with *something* promptly, even if that something is
+ * "inconclusive". Reporting partial findings beats an unbounded wait.
+ */
+const DEFAULT_DEADLINE_MS = 45_000;
+
 export class InvalidReferenceError extends Error {
   constructor(input: string) {
     super(
@@ -66,12 +73,24 @@ export class InvalidReferenceError extends Error {
  * `verseUsfm` must be verse-level: a chapter cannot answer "is the version
  * wrong?" unambiguously, since a chapter query is itself one of the suspects.
  */
+export interface ProbeOptions {
+  ctx?: ProviderContext;
+  /** Called before each version is checked, so the UI can show life. */
+  onProgress?: (done: number, total: number, label: string) => void;
+  /** Give up sweeping after this long and report what was found. */
+  deadlineMs?: number;
+  now?: () => number;
+}
+
 export async function probeHighlightAccess(
   provider: OfficialApiProvider,
   verseUsfm: string,
   configuredBibleId: number,
-  ctx: ProviderContext = {},
+  options: ProbeOptions = {},
 ): Promise<ProbeReport> {
+  const ctx = options.ctx ?? {};
+  const now = options.now ?? Date.now;
+  const deadline = now() + (options.deadlineMs ?? DEFAULT_DEADLINE_MS);
   const parsed = parseUsfm(verseUsfm);
   if (!parsed || parsed.chapter === null || parsed.verse === null) {
     throw new InvalidReferenceError(verseUsfm);
@@ -80,7 +99,10 @@ export async function probeHighlightAccess(
   const normalized = `${parsed.book}.${parsed.chapter}.${parsed.verse}`;
   const chapterUsfm = chapterUsfmOf(normalized);
 
+  options.onProgress?.(0, 2, `checking ${normalized}`);
   const verseLevel = await provider.probeHighlights(configuredBibleId, normalized, ctx);
+
+  options.onProgress?.(1, 2, `checking chapter ${chapterUsfm ?? "n/a"}`);
   const chapterLevel = chapterUsfm
     ? await provider.probeHighlights(configuredBibleId, chapterUsfm, ctx)
     : null;
@@ -88,18 +110,32 @@ export async function probeHighlightAccess(
   // Only sweep other versions when the configured one came back empty; if it
   // already has the highlight, the version is not the problem.
   const otherVersions: VersionProbe[] = [];
+  let sweepComplete = true;
+
   if (verseLevel.count === 0 && (chapterLevel?.count ?? 0) === 0) {
+    options.onProgress?.(2, 3, "listing Bible versions");
     let bibles: Array<{ id: number; abbreviation: string }> = [];
     try {
       bibles = await provider.listBibles(ctx);
     } catch {
       bibles = [];
     }
-    for (const bible of bibles.filter((b) => b.id !== configuredBibleId).slice(0, MAX_VERSIONS)) {
-      if (ctx.signal?.aborted) break;
+
+    const candidates = bibles.filter((b) => b.id !== configuredBibleId).slice(0, MAX_VERSIONS);
+    for (const [index, bible] of candidates.entries()) {
+      if (ctx.signal?.aborted || now() >= deadline) {
+        sweepComplete = false;
+        break;
+      }
+      options.onProgress?.(index, candidates.length, `checking ${bible.abbreviation}`);
       const outcome = await provider.probeHighlights(bible.id, normalized, ctx);
       if (outcome.count > 0 || outcome.status === 403) {
         otherVersions.push({ ...outcome, bibleId: bible.id, abbreviation: bible.abbreviation });
+      }
+      // Stop at the first version that has it: that is the answer.
+      if (outcome.count > 0) {
+        sweepComplete = true;
+        break;
       }
     }
   }
@@ -109,6 +145,7 @@ export async function probeHighlightAccess(
     chapterLevel,
     otherVersions,
     configuredBibleId,
+    sweepComplete,
   });
 
   return {
@@ -130,8 +167,11 @@ export function interpret(input: {
   chapterLevel: ProbeOutcome | null;
   otherVersions: VersionProbe[];
   configuredBibleId: number;
+  /** False when the version sweep was cut short by the deadline or a cancel. */
+  sweepComplete?: boolean;
 }): { conclusion: string; remedy: string | null } {
   const { verseLevel, chapterLevel, otherVersions, configuredBibleId } = input;
+  const sweepComplete = input.sweepComplete !== false;
 
   if (verseLevel.status === 401) {
     return {
@@ -187,6 +227,17 @@ export function interpret(input: {
         "The chapter-level query found highlights in this chapter, but not on the verse asked " +
         "about. The scan works; that particular verse is not highlighted in this version.",
       remedy: null,
+    };
+  }
+
+  if (!sweepComplete) {
+    return {
+      conclusion:
+        `No highlight found on this verse in version ${configuredBibleId}. The sweep of other ` +
+        "versions was cut short before finishing, so this is inconclusive.",
+      remedy:
+        "Run the probe again, or set the version directly if you know which one you read in " +
+        '(use "Load versions" in settings).',
     };
   }
 

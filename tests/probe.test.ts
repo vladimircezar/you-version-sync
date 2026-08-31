@@ -174,3 +174,97 @@ describe("report formatting", () => {
     expect(text).toContain("What to do:");
   });
 });
+
+describe("bounded execution", () => {
+  /** A provider whose version sweep never finds anything, to force a full sweep. */
+  function slowSweep(versionCount: number, msPerCall: number) {
+    let clock = 0;
+    const bibles = Array.from({ length: versionCount }, (_, i) => ({
+      id: 1000 + i,
+      abbreviation: `V${i}`,
+    }));
+    const provider = {
+      async probeHighlights() {
+        clock += msPerCall;
+        return { status: 204, count: 0 };
+      },
+      async listBibles() {
+        return bibles;
+      },
+    } as unknown as OfficialApiProvider;
+    return { provider, now: () => clock, calls: () => clock / msPerCall };
+  }
+
+  it("stops sweeping at the deadline instead of running unbounded", async () => {
+    const { provider, now, calls } = slowSweep(30, 5000);
+    const report = await probeHighlightAccess(provider, "MAT.8.23", 3034, {
+      now,
+      deadlineMs: 20_000,
+    });
+    // 2 configured-version calls, then only as many versions as fit the deadline.
+    expect(calls()).toBeLessThan(10);
+    expect(report.conclusion).toContain("cut short");
+    expect(report.remedy).toContain("Load versions");
+  });
+
+  it("stops at the first version that has the highlight", async () => {
+    const asked: number[] = [];
+    const provider = {
+      async probeHighlights(bibleId: number) {
+        asked.push(bibleId);
+        return bibleId === 111 ? { status: 200, count: 1 } : { status: 204, count: 0 };
+      },
+      async listBibles() {
+        return [
+          { id: 100, abbreviation: "A" },
+          { id: 111, abbreviation: "NIV" },
+          { id: 200, abbreviation: "B" },
+        ];
+      },
+    } as unknown as OfficialApiProvider;
+
+    const report = await probeHighlightAccess(provider, "MAT.8.23", 3034);
+    expect(asked).not.toContain(200);
+    expect(report.remedy).toContain("111");
+  });
+
+  it("honours an abort signal", async () => {
+    const controller = new AbortController();
+    const provider = {
+      async probeHighlights() {
+        controller.abort();
+        return { status: 204, count: 0 };
+      },
+      async listBibles() {
+        return [
+          { id: 1, abbreviation: "A" },
+          { id: 2, abbreviation: "B" },
+        ];
+      },
+    } as unknown as OfficialApiProvider;
+
+    const report = await probeHighlightAccess(provider, "MAT.8.23", 3034, {
+      ctx: { signal: controller.signal },
+    });
+    expect(report.conclusion).toContain("cut short");
+  });
+
+  it("reports progress so the UI can show life", async () => {
+    const events: string[] = [];
+    const provider = {
+      async probeHighlights() {
+        return { status: 204, count: 0 };
+      },
+      async listBibles() {
+        return [{ id: 111, abbreviation: "NIV" }];
+      },
+    } as unknown as OfficialApiProvider;
+
+    await probeHighlightAccess(provider, "MAT.8.23", 3034, {
+      onProgress: (_d, _t, label) => events.push(label),
+    });
+    expect(events[0]).toContain("MAT.8.23");
+    expect(events.some((e) => e.includes("chapter MAT.8"))).toBe(true);
+    expect(events.some((e) => e.includes("NIV"))).toBe(true);
+  });
+});
