@@ -246,7 +246,7 @@ export class OfficialApiProvider implements Provider, HighlightSource {
     bibleId: number,
     passageId: string,
     ctx: ProviderContext = {},
-  ): Promise<{ status: number; count: number; note?: string }> {
+  ): Promise<{ status: number; count: number; note?: string; retryAfterMs?: number }> {
     const query = new URLSearchParams({ bible_id: String(bibleId), passage_id: passageId });
     try {
       const body = await this.get(`/v1/highlights?${query.toString()}`, ctx);
@@ -257,7 +257,8 @@ export class OfficialApiProvider implements Provider, HighlightSource {
     } catch (err) {
       const status = err instanceof HttpError ? err.status : 0;
       const note = err instanceof HttpError ? err.safeMessage : redactError(err);
-      return { status, count: 0, note };
+      const retryAfterMs = err instanceof HttpError ? err.retryAfterMs : undefined;
+      return { status, count: 0, note, retryAfterMs };
     }
   }
 

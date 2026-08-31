@@ -19,7 +19,12 @@ export const DEFAULT_RETRY_POLICY: RetryPolicy = {
   maxAttempts: 4,
   baseDelayMs: 500,
   maxDelayMs: 30_000,
-  minIntervalMs: 120,
+  // Raised from 120ms after observing a real 429 during a version sweep.
+  // YouVersion publishes no numeric limit, so this is calibrated from the only
+  // evidence available: the rate at which it actually refused. A whole-Bible
+  // scan is ~1,189 requests, so this sets the floor at roughly five minutes -
+  // slower, but a scan that finishes beats one that is throttled to death.
+  minIntervalMs: 250,
 };
 
 /** Full-jitter backoff (AWS "Exponential Backoff and Jitter"): random in [0, exp]. */

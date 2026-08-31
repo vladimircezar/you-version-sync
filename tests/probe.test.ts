@@ -7,6 +7,7 @@ import {
   InvalidReferenceError,
   formatProbeReport,
   interpret,
+  isConclusive,
   probeHighlightAccess,
 } from "../src/diagnostics/probe";
 import type { OfficialApiProvider } from "../src/providers/officialApi";
@@ -286,5 +287,125 @@ describe("canon fallback", () => {
     const { canonChapters } = await import("../src/markdown/canon");
     const chapters = canonChapters();
     expect(new Set(chapters).size).toBe(chapters.length);
+  });
+});
+
+describe("refusal is never reported as absence", () => {
+  /**
+   * Regression: a 429 fell through to "No highlight found ... check the verse
+   * really is highlighted", telling the user their data did not exist when the
+   * API had simply declined to answer.
+   */
+  it("reports a 429 as rate limiting, not as an empty result", () => {
+    const limited = { status: 429, count: 0, note: "Rate limited (429) by the YouVersion API." };
+    const r = interpret({
+      verseLevel: limited,
+      chapterLevel: limited,
+      otherVersions: [],
+      configuredBibleId: 59,
+    });
+    expect(r.conclusion).toContain("rate-limited");
+    expect(r.conclusion).toContain("says nothing about whether the highlight exists");
+    expect(r.conclusion).not.toContain("No highlight found");
+    expect(r.remedy).toContain("Wait");
+  });
+
+  it("quotes the server's Retry-After when it gave one", () => {
+    const r = interpret({
+      verseLevel: { status: 429, count: 0, retryAfterMs: 90_000 },
+      chapterLevel: null,
+      otherVersions: [],
+      configuredBibleId: 59,
+    });
+    expect(r.remedy).toContain("90 seconds");
+  });
+
+  it("treats a server error as inconclusive", () => {
+    const r = interpret({
+      verseLevel: { status: 503, count: 0 },
+      chapterLevel: null,
+      otherVersions: [],
+      configuredBibleId: 59,
+    });
+    expect(r.conclusion).toContain("inconclusive");
+    expect(r.conclusion).not.toContain("No highlight found");
+  });
+
+  it("treats a network failure as inconclusive", () => {
+    const r = interpret({
+      verseLevel: { status: 0, count: 0 },
+      chapterLevel: null,
+      otherVersions: [],
+      configuredBibleId: 59,
+    });
+    expect(r.conclusion).toContain("network failure");
+    expect(r.conclusion).toContain("inconclusive");
+  });
+
+  it("still distinguishes 401 and 403, which ARE conclusive about access", () => {
+    expect(
+      interpret({
+        verseLevel: { status: 401, count: 0 },
+        chapterLevel: null,
+        otherVersions: [],
+        configuredBibleId: 59,
+      }).conclusion,
+    ).toContain("401");
+    expect(
+      interpret({
+        verseLevel: { status: 403, count: 0 },
+        chapterLevel: null,
+        otherVersions: [],
+        configuredBibleId: 59,
+      }).conclusion,
+    ).toContain("403");
+  });
+
+  it("classifies only 200 and 204 as answers", () => {
+    expect(isConclusive({ status: 200, count: 1 })).toBe(true);
+    expect(isConclusive({ status: 204, count: 0 })).toBe(true);
+    for (const status of [0, 400, 429, 500, 503]) {
+      expect(isConclusive({ status, count: 0 })).toBe(false);
+    }
+  });
+
+  it("does not sweep other versions when the API is refusing", async () => {
+    const asked: number[] = [];
+    const provider = {
+      async probeHighlights(bibleId: number) {
+        asked.push(bibleId);
+        return { status: 429, count: 0 };
+      },
+      async listBibles() {
+        return [{ id: 111, abbreviation: "NIV" }];
+      },
+    } as unknown as OfficialApiProvider;
+
+    const report = await probeHighlightAccess(provider, "MAT.8.26", 59);
+    // Only the configured version's two queries; no sweep on top of a 429.
+    expect(asked).toEqual([59, 59]);
+    expect(report.conclusion).toContain("rate-limited");
+  });
+
+  it("stops the sweep as soon as the API starts refusing mid-way", async () => {
+    const asked: number[] = [];
+    const provider = {
+      async probeHighlights(bibleId: number) {
+        asked.push(bibleId);
+        if (bibleId === 59) return { status: 204, count: 0 };
+        return bibleId === 100 ? { status: 204, count: 0 } : { status: 429, count: 0 };
+      },
+      async listBibles() {
+        return [
+          { id: 100, abbreviation: "A" },
+          { id: 200, abbreviation: "B" },
+          { id: 300, abbreviation: "C" },
+        ];
+      },
+    } as unknown as OfficialApiProvider;
+
+    const report = await probeHighlightAccess(provider, "MAT.8.26", 59);
+    expect(asked).not.toContain(300);
+    expect(report.conclusion).toContain("rate-limited");
   });
 });

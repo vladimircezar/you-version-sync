@@ -164,7 +164,10 @@ a 302 to `/auth/callback`, so the browser performs the navigation itself
 
 ## Rate limits
 
-**No numeric rate limit is published.** The error-codes page says rate limiting "may" be
+**No numeric rate limit is published**, but one is real and reachable: a probe issuing ~30
+back-to-back highlight requests at 120 ms spacing was answered with **429** on 2026-08-30. That is
+the only hard evidence available, so the default minimum interval was raised to 250 ms and the
+probe sweep reduced to 12 versions. The error-codes page says rate limiting "may" be
 implemented, and documents 429 with `Retry-After`. Because a chapter scan is request-heavy, the
 plugin is conservative by default: a minimum interval between requests, full-jitter exponential
 backoff, bounded retries, unconditional obedience to `Retry-After`, a default scope of the New

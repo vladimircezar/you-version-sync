@@ -649,7 +649,9 @@ export default class YouVersionSyncPlugin extends Plugin {
     const http = options.fastFail
       ? new ResilientHttp({
           transport: obsidianTransport,
-          policy: { maxAttempts: 1, baseDelayMs: 200, maxDelayMs: 1000, minIntervalMs: 60 },
+          // One retry, tightly capped: enough for a transient 429 to clear,
+          // never enough to make the user wait or to deepen a real limit.
+          policy: { maxAttempts: 2, baseDelayMs: 400, maxDelayMs: 2000, minIntervalMs: 200 },
           onAttempt: (info) => this.logger.recordRequest(info),
         })
       : this.http;

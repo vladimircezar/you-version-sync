@@ -27,6 +27,20 @@ export interface ProbeOutcome {
   status: number;
   count: number;
   note?: string;
+  /** Milliseconds the server asked us to wait, when it sent Retry-After. */
+  retryAfterMs?: number;
+}
+
+/**
+ * Did the API actually answer the question?
+ *
+ * Only 200 and 204 are answers. Everything else - 429, 5xx, a network failure -
+ * means the API declined to say, and must never be reported as "you have no
+ * highlights there". Conflating "refused" with "empty" is how a diagnostic ends
+ * up confidently telling someone their data does not exist.
+ */
+export function isConclusive(outcome: ProbeOutcome): boolean {
+  return outcome.status === 200 || outcome.status === 204;
 }
 
 export interface VersionProbe extends ProbeOutcome {
@@ -47,8 +61,12 @@ export interface ProbeReport {
   remedy: string | null;
 }
 
-/** How many versions to sweep. Each is one request; keep it civil. */
-const MAX_VERSIONS = 30;
+/**
+ * How many versions to sweep. Each is one request, issued back to back, so this
+ * is the part of the probe most likely to trip a rate limit - it was 30, which
+ * did exactly that. Keep it small; the sweep stops at the first hit anyway.
+ */
+const MAX_VERSIONS = 12;
 
 /**
  * Hard ceiling on the whole sweep. A probe is an interactive diagnostic - it
@@ -111,8 +129,12 @@ export async function probeHighlightAccess(
   // already has the highlight, the version is not the problem.
   const otherVersions: VersionProbe[] = [];
   let sweepComplete = true;
+  let rateLimited: ProbeOutcome | null = null;
 
-  if (verseLevel.count === 0 && (chapterLevel?.count ?? 0) === 0) {
+  const answered =
+    isConclusive(verseLevel) && (chapterLevel === null || isConclusive(chapterLevel));
+
+  if (answered && verseLevel.count === 0 && (chapterLevel?.count ?? 0) === 0) {
     options.onProgress?.(2, 3, "listing Bible versions");
     let bibles: Array<{ id: number; abbreviation: string }> = [];
     try {
@@ -132,6 +154,13 @@ export async function probeHighlightAccess(
       if (outcome.count > 0 || outcome.status === 403) {
         otherVersions.push({ ...outcome, bibleId: bible.id, abbreviation: bible.abbreviation });
       }
+      // Back off the instant the API starts refusing: continuing would deepen a
+      // rate limit and produce nothing useful.
+      if (outcome.status === 429 || outcome.status >= 500 || outcome.status === 0) {
+        rateLimited = outcome;
+        sweepComplete = false;
+        break;
+      }
       // Stop at the first version that has it: that is the answer.
       if (outcome.count > 0) {
         sweepComplete = true;
@@ -146,6 +175,7 @@ export async function probeHighlightAccess(
     otherVersions,
     configuredBibleId,
     sweepComplete,
+    rateLimited,
   });
 
   return {
@@ -169,9 +199,41 @@ export function interpret(input: {
   configuredBibleId: number;
   /** False when the version sweep was cut short by the deadline or a cancel. */
   sweepComplete?: boolean;
+  /** Set when the sweep stopped because the API started refusing. */
+  rateLimited?: ProbeOutcome | null;
 }): { conclusion: string; remedy: string | null } {
   const { verseLevel, chapterLevel, otherVersions, configuredBibleId } = input;
   const sweepComplete = input.sweepComplete !== false;
+
+  // Refusals first. None of these say anything about whether a highlight
+  // exists, so no conclusion about the data may be drawn from them.
+  const refusal = [verseLevel, chapterLevel, input.rateLimited].find(
+    (o): o is ProbeOutcome => o != null && !isConclusive(o) && o.status !== 401 && o.status !== 403,
+  );
+  if (refusal) {
+    const wait = refusal.retryAfterMs
+      ? `${Math.ceil(refusal.retryAfterMs / 1000)} seconds`
+      : "a few minutes";
+
+    if (refusal.status === 429) {
+      return {
+        conclusion:
+          "The API rate-limited the request (429), so it never answered the question. This says " +
+          "nothing about whether the highlight exists.",
+        remedy:
+          `Wait ${wait} and run the probe again. Rate limits are per App Key, so a large sync ` +
+          "or a previous probe can trigger them.",
+      };
+    }
+
+    return {
+      conclusion:
+        `The API did not answer (${refusal.status === 0 ? "network failure" : `HTTP ${refusal.status}`})` +
+        `${refusal.note ? `: ${refusal.note}` : ""}. This is inconclusive - it says nothing about ` +
+        "whether the highlight exists.",
+      remedy: `Wait ${wait} and try again. If it persists, check your connection and App Key.`,
+    };
+  }
 
   if (verseLevel.status === 401) {
     return {

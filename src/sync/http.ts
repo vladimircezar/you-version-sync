@@ -46,6 +46,8 @@ export class HttpError extends Error {
     readonly status: number,
     readonly safeMessage: string,
     readonly url: string,
+    /** Milliseconds the server asked us to wait, when it said so. */
+    readonly retryAfterMs?: number,
   ) {
     super(safeMessage);
     this.name = "HttpError";
@@ -104,6 +106,7 @@ export class ResilientHttp {
         response.status,
         describeStatus(response.status, response.text),
         redactUrl(req.url),
+        parseRetryAfter(headerOf(response.headers, "retry-after")) ?? undefined,
       );
 
       if (!isRetryableStatus(response.status) || attempt === this.policy.maxAttempts) break;
