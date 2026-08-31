@@ -20,6 +20,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Smoke-test the OAuth loopback receiver as bundled
+        run: npm run smoke
       - name: Audit the bundle for secrets and unexpected hosts
         run: |
           ! grep -qE 'eyJ[A-Za-z0-9_-]{20,}' main.js

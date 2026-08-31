@@ -1,6 +1,6 @@
 {
   "name": "obsidian-youversion-sync",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Obsidian plugin that imports your YouVersion Bible highlights into your vault as durable Markdown.",
   "main": "main.js",
   "private": true,
@@ -16,7 +16,8 @@
     "format:check": "prettier --check \"{src,tests}/**/*.ts\"",
     "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build",
     "preview": "node scripts/run-preview.mjs",
-    "check:bundle": "node scripts/check-bundle.mjs"
+    "check:bundle": "node scripts/check-bundle.mjs",
+    "smoke": "node scripts/smoke-loopback.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
