@@ -17,7 +17,9 @@ import { CAPABILITIES } from "./capabilities";
 import { HighlightSource, Provider } from "./types";
 
 export const EXPERIMENTAL_STATUS =
-  "Experimental connector: Not implemented. YouVersion does not officially expose these data types.";
+  "Not implemented. YouVersion does not officially expose these data types, and reaching them " +
+  "would mean using undocumented endpoints - which requires a separate decision and a security " +
+  "review before any of it is written.";
 
 export class ExperimentalProvider implements Provider {
   readonly id = "experimental" as const;

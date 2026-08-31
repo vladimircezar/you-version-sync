@@ -347,6 +347,16 @@ export class YouVersionSettingTab extends PluginSettingTab {
   private renderDataTypes(el: HTMLElement): void {
     new Setting(el).setName("Data types").setHeading();
 
+    el.createEl("p", {
+      cls: "setting-item-description",
+      text:
+        "Highlights are the only user data YouVersion's public API exposes. The rows below are " +
+        "disabled because no endpoint and no permission exist for them - not because the plugin " +
+        "is unfinished. To get that data out of YouVersion today, request a copy of your account " +
+        "data from Life.Church directly; if you obtain an export file, the import command can be " +
+        "taught to read it.",
+    });
+
     for (const capability of CAPABILITIES) {
       const setting = new Setting(el)
         .setName(titleCase(capability.dataType))
@@ -365,10 +375,7 @@ export class YouVersionSettingTab extends PluginSettingTab {
 
     new Setting(el)
       .setName("Experimental connector")
-      .setDesc(
-        `${EXPERIMENTAL_STATUS} Enabling any undocumented access would require a separate ` +
-          "decision and security review.",
-      )
+      .setDesc(EXPERIMENTAL_STATUS)
       .addToggle((t) => t.setValue(false).setDisabled(true));
   }
 
