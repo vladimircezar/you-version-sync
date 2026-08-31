@@ -551,16 +551,19 @@ export default class YouVersionSyncPlugin extends Plugin {
     new PromptModal(
       this.app,
       "Diagnose highlight access",
-      "Enter one verse you know you have highlighted, in USFM form. The probe asks the API " +
-        "about it directly and reports what comes back.",
+      "Enter one verse you know you have highlighted, in USFM form, and optionally the Bible " +
+        "version it is in. Highlights are stored per version, so testing the right one matters " +
+        "more than anything else here. ESV is 59, NIV is 111, BSB is 3034.",
       "JHN.3.16",
-      async (reference) => {
+      String(this.settings.bibleId),
+      async (reference, bibleIdInput) => {
+        const bibleId = Number(bibleIdInput) || this.settings.bibleId;
         const notice = new Notice("Probing highlight access...", 0);
         const controller = new AbortController();
         // Never let a diagnostic run unbounded, whatever the network does.
         const guard = window.setTimeout(() => controller.abort(), 60_000);
         try {
-          const report = await probeHighlightAccess(provider, reference, this.settings.bibleId, {
+          const report = await probeHighlightAccess(provider, reference, bibleId, {
             ctx: { signal: controller.signal },
             onProgress: (done, total, label) => {
               notice.setMessage(`Probing highlight access: ${label} (${done + 1}/${total})`);
@@ -581,8 +584,10 @@ export default class YouVersionSyncPlugin extends Plugin {
   }
 
   /** Bible versions this App Key can see, for the settings picker. */
-  async listBibleVersions(): Promise<Array<{ id: number; abbreviation: string }>> {
-    return this.buildProvider().listBibles();
+  async listBibleVersions(
+    allAvailable = false,
+  ): Promise<Array<{ id: number; abbreviation: string }>> {
+    return this.buildProvider({ fastFail: true }).listBibles({}, allAvailable);
   }
 
   buildDiagnosticsReport(): string {
@@ -721,34 +726,48 @@ const obsidianTransport: Transport = async (req: HttpRequest): Promise<HttpRespo
   return { status: response.status, headers, text: response.text ?? "" };
 };
 
-/** Single-field prompt. Used to ask for a verse reference. */
+/** Two-field prompt: the verse to test, and which Bible version to test it in. */
 class PromptModal extends Modal {
   private value = "";
+  private secondValue = "";
 
   constructor(
     app: import("obsidian").App,
     private readonly heading: string,
     private readonly body: string,
     private readonly placeholder: string,
-    private readonly onSubmit: (value: string) => void | Promise<void>,
+    private readonly defaultVersion: string,
+    private readonly onSubmit: (value: string, version: string) => void | Promise<void>,
   ) {
     super(app);
+    this.secondValue = defaultVersion;
   }
 
   override onOpen(): void {
     this.titleEl.setText(this.heading);
     this.contentEl.createEl("p", { text: this.body });
 
-    new Setting(this.contentEl).setName("Verse").addText((text) =>
-      text
-        .setPlaceholder(this.placeholder)
-        .onChange((v) => {
-          this.value = v.trim();
-        })
-        .inputEl.addEventListener("keydown", (event: KeyboardEvent) => {
+    new Setting(this.contentEl).setName("Verse (USFM)").addText((text) => {
+      text.setPlaceholder(this.placeholder).onChange((v) => {
+        this.value = v.trim();
+      });
+      text.inputEl.addEventListener("keydown", (event: KeyboardEvent) => {
+        if (event.key === "Enter") this.submit();
+      });
+      window.setTimeout(() => text.inputEl.focus(), 0);
+    });
+
+    new Setting(this.contentEl)
+      .setName("Bible version id")
+      .setDesc("The version the highlight was made in. Defaults to your configured version.")
+      .addText((text) => {
+        text.setValue(this.defaultVersion).onChange((v) => {
+          this.secondValue = v.trim();
+        });
+        text.inputEl.addEventListener("keydown", (event: KeyboardEvent) => {
           if (event.key === "Enter") this.submit();
-        }),
-    );
+        });
+      });
 
     const row = this.contentEl.createDiv({ cls: "modal-button-container" });
     new ButtonComponent(row).setButtonText("Cancel").onClick(() => this.close());
@@ -760,8 +779,9 @@ class PromptModal extends Modal {
 
   private submit(): void {
     const value = this.value || this.placeholder;
+    const version = this.secondValue || this.defaultVersion;
     this.close();
-    void this.onSubmit(value);
+    void this.onSubmit(value, version);
   }
 
   override onClose(): void {

@@ -268,3 +268,23 @@ describe("bounded execution", () => {
     expect(events.some((e) => e.includes("NIV"))).toBe(true);
   });
 });
+
+describe("canon fallback", () => {
+  it("covers the whole 66-book canon", async () => {
+    const { canonChapterCount, canonChapters } = await import("../src/markdown/canon");
+    // The well-known total; a wrong table would show up here immediately.
+    expect(canonChapterCount()).toBe(1189);
+    const chapters = canonChapters();
+    expect(chapters).toHaveLength(1189);
+    expect(chapters[0]).toBe("GEN.1");
+    expect(chapters[chapters.length - 1]).toBe("REV.22");
+    expect(chapters).toContain("MAT.8");
+    expect(chapters).toContain("PSA.150");
+  });
+
+  it("has no duplicate chapters", async () => {
+    const { canonChapters } = await import("../src/markdown/canon");
+    const chapters = canonChapters();
+    expect(new Set(chapters).size).toBe(chapters.length);
+  });
+});

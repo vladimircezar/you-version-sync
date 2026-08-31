@@ -360,7 +360,7 @@ export class YouVersionSettingTab extends PluginSettingTab {
         btn.setButtonText("Load versions").onClick(async () => {
           btn.setDisabled(true).setButtonText("Loading...");
           try {
-            const versions = await this.plugin.listBibleVersions();
+            const versions = await this.plugin.listBibleVersions(true);
             if (versions.length === 0) {
               new Notice("No Bible versions were returned for this App Key.");
               return;
@@ -379,7 +379,7 @@ export class YouVersionSettingTab extends PluginSettingTab {
     if (this.availableVersions.length > 0) {
       new Setting(el)
         .setName("Available versions")
-        .setDesc("Versions your App Key can read. Picking one sets the id above.")
+        .setDesc("Bible versions in the catalogue. Picking one sets the id above.")
         .addDropdown((dd) => {
           for (const v of this.availableVersions)
             dd.addOption(String(v.id), `${v.abbreviation} (${v.id})`);

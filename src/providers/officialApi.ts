@@ -34,37 +34,7 @@ import { BookTitles, formatReference } from "../markdown/reference";
 import { redactError } from "../security/redact";
 import { CAPABILITIES } from "./capabilities";
 import { fnv1a64 } from "../sync/hash";
-
-/** USFM ids of the 27 New Testament books, in canonical order. */
-const NEW_TESTAMENT = new Set([
-  "MAT",
-  "MRK",
-  "LUK",
-  "JHN",
-  "ACT",
-  "ROM",
-  "1CO",
-  "2CO",
-  "GAL",
-  "EPH",
-  "PHP",
-  "COL",
-  "1TH",
-  "2TH",
-  "1TI",
-  "2TI",
-  "TIT",
-  "PHM",
-  "HEB",
-  "JAS",
-  "1PE",
-  "2PE",
-  "1JN",
-  "2JN",
-  "3JN",
-  "JUD",
-  "REV",
-]);
+import { NEW_TESTAMENT_BOOKS, canonChapters } from "../markdown/canon";
 
 export interface ScanScopeConfig {
   scope: "whole" | "new_testament" | "old_testament" | "books";
@@ -95,6 +65,8 @@ export class OfficialApiProvider implements Provider, HighlightSource {
   readonly capabilities: readonly Capability[] = CAPABILITIES;
 
   private metadata: BibleMetadata | null = null;
+  /** True when the last plan came from the static canon, not the API index. */
+  usedCanonFallback = false;
   /** Verse text cache for the current run, keyed by USFM. */
   private readonly verseTextCache = new Map<string, string | undefined>();
 
@@ -134,9 +106,14 @@ export class OfficialApiProvider implements Provider, HighlightSource {
   /** Cached Bible metadata for the configured version. Safe to call repeatedly. */
   async bibleMetadata(ctx: ProviderContext = {}): Promise<BibleMetadata> {
     if (this.metadata) return this.metadata;
-    const index = await this.fetchIndex(ctx);
+
     const bookTitles: Record<string, string> = {};
-    for (const book of index.books) if (book.title) bookTitles[book.id] = book.title;
+    try {
+      const index = await this.fetchIndex(ctx);
+      for (const book of index.books) if (book.title) bookTitles[book.id] = book.title;
+    } catch {
+      // No index for this version; references fall back to the built-in names.
+    }
 
     let abbreviation: string | undefined;
     let copyright: string | undefined;
@@ -156,15 +133,37 @@ export class OfficialApiProvider implements Provider, HighlightSource {
   }
 
   async planScan(ctx: ProviderContext): Promise<{ chapters: ChapterTask[]; fingerprint: string }> {
-    const index = await this.fetchIndex(ctx);
     const wanted = this.bookFilter();
-
     const chapters: ChapterTask[] = [];
-    for (const book of index.books) {
-      if (!wanted(book.id)) continue;
-      for (const chapter of book.chapters) {
-        if (!chapter.passage_id) continue;
-        chapters.push({ chapterUsfm: chapter.passage_id, bibleId: this.options.bibleId });
+    let source: "index" | "canon" = "index";
+
+    let index: ApiBibleIndex | null = null;
+    try {
+      index = await this.fetchIndex(ctx);
+    } catch {
+      // The index can be refused for a Bible this App Key is not licensed for.
+      // Highlights may still be readable, so fall back to the static canon
+      // rather than refusing to sync a version the user actually reads.
+      index = null;
+    }
+
+    if (index) {
+      for (const book of index.books) {
+        if (!wanted(book.id)) continue;
+        for (const chapter of book.chapters) {
+          if (!chapter.passage_id) continue;
+          chapters.push({ chapterUsfm: chapter.passage_id, bibleId: this.options.bibleId });
+        }
+      }
+    }
+
+    if (chapters.length === 0) {
+      source = "canon";
+      this.usedCanonFallback = true;
+      for (const chapterUsfm of canonChapters()) {
+        const book = chapterUsfm.split(".")[0] as string;
+        if (!wanted(book)) continue;
+        chapters.push({ chapterUsfm, bibleId: this.options.bibleId });
       }
     }
 
@@ -172,7 +171,7 @@ export class OfficialApiProvider implements Provider, HighlightSource {
     // invalidates a saved cursor, because chapter indices would no longer align.
     const fingerprint = fnv1a64(
       `${this.options.bibleId}|${this.options.scanScope.scope}|` +
-        `${[...this.options.scanScope.books].sort().join(",")}|${chapters.length}|` +
+        `${[...this.options.scanScope.books].sort().join(",")}|${source}|${chapters.length}|` +
         `${chapters[0]?.chapterUsfm ?? ""}|${chapters[chapters.length - 1]?.chapterUsfm ?? ""}`,
     );
 
@@ -265,8 +264,12 @@ export class OfficialApiProvider implements Provider, HighlightSource {
   /** Bible versions this App Key can see, for the version picker and probes. */
   async listBibles(
     ctx: ProviderContext = {},
+    allAvailable = false,
   ): Promise<Array<{ id: number; abbreviation: string }>> {
     const query = new URLSearchParams({ "language_ranges[]": "eng" });
+    // The default list is only what this App Key is licensed for. The full
+    // catalogue is what lets a user find the id of the version they read.
+    if (allAvailable) query.set("all_available", "true");
     const body = await this.get(`/v1/bibles?${query.toString()}`, ctx);
     if (body === null) return [];
     const parsed = ApiBibleListSchema.safeParse(JSON.parse(body));
@@ -285,8 +288,8 @@ export class OfficialApiProvider implements Provider, HighlightSource {
   private bookFilter(): (bookId: string) => boolean {
     const { scope, books } = this.options.scanScope;
     if (scope === "whole") return () => true;
-    if (scope === "new_testament") return (id) => NEW_TESTAMENT.has(id);
-    if (scope === "old_testament") return (id) => !NEW_TESTAMENT.has(id);
+    if (scope === "new_testament") return (id) => NEW_TESTAMENT_BOOKS.has(id);
+    if (scope === "old_testament") return (id) => !NEW_TESTAMENT_BOOKS.has(id);
     const wanted = new Set(books.map((b) => b.toUpperCase()));
     return (id) => wanted.has(id.toUpperCase());
   }
