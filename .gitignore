@@ -1,0 +1,17 @@
+node_modules/
+main.js
+*.js.map
+.DS_Store
+coverage/
+dist/
+
+# Never commit plugin runtime data — it contains OAuth tokens.
+data.json
+.obsidian/
+
+# Never commit real YouVersion account exports or credentials.
+*.local
+.env
+.env.*
+secrets/
+fixtures-private/

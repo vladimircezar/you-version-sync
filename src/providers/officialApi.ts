@@ -1,0 +1,323 @@
+/**
+ * The official YouVersion Platform API provider.
+ *
+ * ## Why this scans chapters
+ *
+ * `GET /v1/highlights` requires **both** `bible_id` and `passage_id`. There is
+ * no "list my highlights" route, no `since` parameter and no pagination over a
+ * user's highlights - the only question the API answers is "is this passage
+ * highlighted?". A chapter-level `passage_id` is accepted and returns one entry
+ * per highlighted verse in that chapter, so walking the ~1,189 chapters of a
+ * Bible (or a narrower configured scope) is the only documented way to discover
+ * highlights. That is why scope, throttling and a resumable cursor are core
+ * rather than optional. See docs/api-research.md.
+ *
+ * The API also returns no highlight id and no timestamps, so identity is the
+ * natural key `bible_id:passage_id` and there is nothing to sync incrementally
+ * *by time* - incrementality comes from content hashing and cursor resumption.
+ */
+import {
+  ApiBibleIndex,
+  ApiBibleIndexSchema,
+  ApiBibleSchema,
+  ApiHighlightCollectionSchema,
+  ApiPassageSchema,
+} from "../models/api";
+import { API_BASE, HIGHLIGHTS_PERMISSION, bibleComUrl } from "../constants";
+import { Capability, HighlightItem } from "../models/domain";
+import { ChapterTask, HighlightSource, Provider, ProviderContext } from "./types";
+import { HttpError, ResilientHttp } from "../sync/http";
+import { OAuthClient } from "../auth/oauth";
+import { NotConnectedError, TokenStore } from "../auth/tokenStore";
+import { BookTitles, formatReference } from "../markdown/reference";
+import { CAPABILITIES } from "./capabilities";
+import { fnv1a64 } from "../sync/hash";
+
+/** USFM ids of the 27 New Testament books, in canonical order. */
+const NEW_TESTAMENT = new Set([
+  "MAT",
+  "MRK",
+  "LUK",
+  "JHN",
+  "ACT",
+  "ROM",
+  "1CO",
+  "2CO",
+  "GAL",
+  "EPH",
+  "PHP",
+  "COL",
+  "1TH",
+  "2TH",
+  "1TI",
+  "2TI",
+  "TIT",
+  "PHM",
+  "HEB",
+  "JAS",
+  "1PE",
+  "2PE",
+  "1JN",
+  "2JN",
+  "3JN",
+  "JUD",
+  "REV",
+]);
+
+export interface ScanScopeConfig {
+  scope: "whole" | "new_testament" | "old_testament" | "books";
+  /** USFM book ids, used when `scope` is `books`. */
+  books: string[];
+}
+
+export interface OfficialApiProviderOptions {
+  http: ResilientHttp;
+  oauth: OAuthClient;
+  tokens: TokenStore;
+  appKey: string;
+  bibleId: number;
+  scanScope: ScanScopeConfig;
+  /** Fetch and store scripture text alongside each highlight. */
+  downloadVerseText: boolean;
+}
+
+interface BibleMetadata {
+  abbreviation?: string;
+  copyright?: string;
+  bookTitles: BookTitles;
+}
+
+export class OfficialApiProvider implements Provider, HighlightSource {
+  readonly id = "official-api" as const;
+  readonly displayName = "YouVersion official API";
+  readonly capabilities: readonly Capability[] = CAPABILITIES;
+
+  private metadata: BibleMetadata | null = null;
+  /** Verse text cache for the current run, keyed by USFM. */
+  private readonly verseTextCache = new Map<string, string | undefined>();
+
+  constructor(private readonly options: OfficialApiProviderOptions) {}
+
+  async availability(): Promise<{ usable: boolean; reason: string }> {
+    if (!this.options.appKey) {
+      return { usable: false, reason: "No App Key configured. Add one in settings." };
+    }
+    if (!this.options.tokens.isConnected()) {
+      return { usable: false, reason: "Not connected to a YouVersion account." };
+    }
+    if (!this.options.tokens.hasPermission(HIGHLIGHTS_PERMISSION)) {
+      return {
+        usable: false,
+        reason: "The highlights permission was not granted. Reconnect and approve it.",
+      };
+    }
+    return { usable: true, reason: "Ready." };
+  }
+
+  highlights(): HighlightSource {
+    return this;
+  }
+
+  /** Cached Bible metadata for the configured version. Safe to call repeatedly. */
+  async bibleMetadata(ctx: ProviderContext = {}): Promise<BibleMetadata> {
+    if (this.metadata) return this.metadata;
+    const index = await this.fetchIndex(ctx);
+    const bookTitles: Record<string, string> = {};
+    for (const book of index.books) if (book.title) bookTitles[book.id] = book.title;
+
+    let abbreviation: string | undefined;
+    let copyright: string | undefined;
+    try {
+      const res = await this.get(`/v1/bibles/${this.options.bibleId}`, ctx);
+      if (res) {
+        const bible = ApiBibleSchema.parse(JSON.parse(res));
+        abbreviation = bible.localized_abbreviation ?? bible.abbreviation;
+        copyright = bible.copyright;
+      }
+    } catch {
+      // Version metadata is cosmetic; a failure must not abort a sync.
+    }
+
+    this.metadata = { abbreviation, copyright, bookTitles };
+    return this.metadata;
+  }
+
+  async planScan(ctx: ProviderContext): Promise<{ chapters: ChapterTask[]; fingerprint: string }> {
+    const index = await this.fetchIndex(ctx);
+    const wanted = this.bookFilter();
+
+    const chapters: ChapterTask[] = [];
+    for (const book of index.books) {
+      if (!wanted(book.id)) continue;
+      for (const chapter of book.chapters) {
+        if (!chapter.passage_id) continue;
+        chapters.push({ chapterUsfm: chapter.passage_id, bibleId: this.options.bibleId });
+      }
+    }
+
+    // The fingerprint pins both the scope and the version. Any change to either
+    // invalidates a saved cursor, because chapter indices would no longer align.
+    const fingerprint = fnv1a64(
+      `${this.options.bibleId}|${this.options.scanScope.scope}|` +
+        `${[...this.options.scanScope.books].sort().join(",")}|${chapters.length}|` +
+        `${chapters[0]?.chapterUsfm ?? ""}|${chapters[chapters.length - 1]?.chapterUsfm ?? ""}`,
+    );
+
+    return { chapters, fingerprint };
+  }
+
+  async fetchChapterHighlights(task: ChapterTask, ctx: ProviderContext): Promise<HighlightItem[]> {
+    const query = new URLSearchParams({
+      bible_id: String(task.bibleId),
+      passage_id: task.chapterUsfm,
+    });
+
+    const body = await this.get(`/v1/highlights?${query.toString()}`, ctx);
+    // 204 means the chapter simply has no highlights - a normal, common answer.
+    if (body === null) return [];
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      throw new HttpError(
+        200,
+        "The highlights endpoint returned a malformed JSON body.",
+        "/v1/highlights",
+      );
+    }
+
+    const collection = ApiHighlightCollectionSchema.safeParse(parsed);
+    if (!collection.success) {
+      throw new HttpError(
+        200,
+        "The highlights response did not match the documented schema.",
+        "/v1/highlights",
+      );
+    }
+
+    const meta = await this.bibleMetadata(ctx);
+    const items: HighlightItem[] = [];
+
+    for (const raw of collection.data.data) {
+      // Guard against a chapter query echoing verses from elsewhere.
+      if (raw.bible_id !== task.bibleId) continue;
+
+      const usfm = raw.passage_id.toUpperCase();
+      const verseText = this.options.downloadVerseText
+        ? await this.fetchVerseText(usfm, ctx)
+        : undefined;
+
+      items.push({
+        id: `${raw.bible_id}:${usfm}`,
+        type: "highlight",
+        usfm,
+        reference: formatReference(usfm, meta.bookTitles),
+        bibleId: raw.bible_id,
+        bibleVersion: meta.abbreviation,
+        color: raw.color,
+        canonicalUrl: bibleComUrl(raw.bible_id, usfm),
+        verseText,
+        copyright: verseText ? meta.copyright : undefined,
+      });
+    }
+
+    return items;
+  }
+
+  /** Clear per-run caches so a fresh sync re-reads version metadata. */
+  resetRunCaches(): void {
+    this.verseTextCache.clear();
+  }
+
+  private bookFilter(): (bookId: string) => boolean {
+    const { scope, books } = this.options.scanScope;
+    if (scope === "whole") return () => true;
+    if (scope === "new_testament") return (id) => NEW_TESTAMENT.has(id);
+    if (scope === "old_testament") return (id) => !NEW_TESTAMENT.has(id);
+    const wanted = new Set(books.map((b) => b.toUpperCase()));
+    return (id) => wanted.has(id.toUpperCase());
+  }
+
+  private async fetchIndex(ctx: ProviderContext): Promise<ApiBibleIndex> {
+    const body = await this.get(`/v1/bibles/${this.options.bibleId}/index`, ctx);
+    if (body === null) {
+      throw new HttpError(
+        204,
+        `Bible version ${this.options.bibleId} returned no index.`,
+        "/index",
+      );
+    }
+    return ApiBibleIndexSchema.parse(JSON.parse(body));
+  }
+
+  /**
+   * Verse text is optional and licence-dependent. A failure here degrades the
+   * note (no quoted text) rather than failing the highlight.
+   */
+  private async fetchVerseText(usfm: string, ctx: ProviderContext): Promise<string | undefined> {
+    const cached = this.verseTextCache.get(usfm);
+    if (this.verseTextCache.has(usfm)) return cached;
+
+    let text: string | undefined;
+    try {
+      const body = await this.get(
+        `/v1/bibles/${this.options.bibleId}/passages/${encodeURIComponent(usfm)}?format=text`,
+        ctx,
+      );
+      if (body !== null) {
+        const passage = ApiPassageSchema.safeParse(JSON.parse(body));
+        if (passage.success) text = passage.data.content?.trim() || undefined;
+      }
+    } catch {
+      text = undefined;
+    }
+
+    this.verseTextCache.set(usfm, text);
+    return text;
+  }
+
+  /**
+   * Authenticated GET. Returns the body, or `null` for a documented 204.
+   * Refreshes the access token once on a 401 before giving up, which covers a
+   * token that expired mid-scan.
+   */
+  private async get(
+    path: string,
+    ctx: ProviderContext,
+    retriedAfterRefresh = false,
+  ): Promise<string | null> {
+    const accessToken = await this.options.tokens.getAccessToken(this.options.oauth);
+
+    let res;
+    try {
+      res = await this.options.http.send(
+        {
+          url: `${API_BASE}${path}`,
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "X-YVP-App-Key": this.options.appKey,
+            Accept: "application/json",
+          },
+        },
+        ctx.signal,
+      );
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 401 && !retriedAfterRefresh) {
+        await this.forceRefresh();
+        return this.get(path, ctx, true);
+      }
+      throw err;
+    }
+
+    if (res.status === 204) return null;
+    return res.text;
+  }
+
+  /** Expire the cached access token so the next call refreshes it. */
+  private async forceRefresh(): Promise<void> {
+    if (!this.options.tokens.isConnected()) throw new NotConnectedError();
+    this.options.tokens.invalidateAccessToken();
+  }
+}

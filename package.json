@@ -1,0 +1,37 @@
+{
+  "name": "obsidian-youversion-sync",
+  "version": "0.1.0",
+  "description": "Obsidian plugin that imports your YouVersion Bible highlights into your vault as durable Markdown.",
+  "main": "main.js",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit && node esbuild.config.mjs production && node scripts/check-bundle.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src tests --ext .ts",
+    "format": "prettier --write \"{src,tests}/**/*.ts\" \"docs/**/*.md\"",
+    "format:check": "prettier --check \"{src,tests}/**/*.ts\"",
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build",
+    "preview": "node scripts/run-preview.mjs",
+    "check:bundle": "node scripts/check-bundle.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@typescript-eslint/eslint-plugin": "^8.18.0",
+    "@typescript-eslint/parser": "^8.18.0",
+    "builtin-modules": "^4.0.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^8.57.1",
+    "obsidian": "^1.7.2",
+    "prettier": "^3.4.2",
+    "tslib": "^2.8.1",
+    "typescript": "^5.7.2",
+    "vitest": "^4.1.11"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  }
+}
