@@ -19,6 +19,7 @@
 import {
   ApiBibleIndex,
   ApiBibleIndexSchema,
+  ApiBibleListSchema,
   ApiBibleSchema,
   ApiHighlightCollectionSchema,
   ApiPassageSchema,
@@ -30,6 +31,7 @@ import { HttpError, ResilientHttp } from "../sync/http";
 import { OAuthClient } from "../auth/oauth";
 import { NotConnectedError, TokenStore } from "../auth/tokenStore";
 import { BookTitles, formatReference } from "../markdown/reference";
+import { redactError } from "../security/redact";
 import { CAPABILITIES } from "./capabilities";
 import { fnv1a64 } from "../sync/hash";
 
@@ -234,6 +236,45 @@ export class OfficialApiProvider implements Provider, HighlightSource {
     }
 
     return items;
+  }
+
+  /**
+   * Raw highlight query, for diagnostics. Returns the HTTP status alongside the
+   * parsed rows so a probe can tell "204, genuinely none" apart from "403, not
+   * permitted" and from a schema mismatch.
+   */
+  async probeHighlights(
+    bibleId: number,
+    passageId: string,
+    ctx: ProviderContext = {},
+  ): Promise<{ status: number; count: number; note?: string }> {
+    const query = new URLSearchParams({ bible_id: String(bibleId), passage_id: passageId });
+    try {
+      const body = await this.get(`/v1/highlights?${query.toString()}`, ctx);
+      if (body === null) return { status: 204, count: 0 };
+      const parsed = ApiHighlightCollectionSchema.safeParse(JSON.parse(body));
+      if (!parsed.success) return { status: 200, count: 0, note: "response did not match schema" };
+      return { status: 200, count: parsed.data.data.length };
+    } catch (err) {
+      const status = err instanceof HttpError ? err.status : 0;
+      const note = err instanceof HttpError ? err.safeMessage : redactError(err);
+      return { status, count: 0, note };
+    }
+  }
+
+  /** Bible versions this App Key can see, for the version picker and probes. */
+  async listBibles(
+    ctx: ProviderContext = {},
+  ): Promise<Array<{ id: number; abbreviation: string }>> {
+    const query = new URLSearchParams({ "language_ranges[]": "eng" });
+    const body = await this.get(`/v1/bibles?${query.toString()}`, ctx);
+    if (body === null) return [];
+    const parsed = ApiBibleListSchema.safeParse(JSON.parse(body));
+    if (!parsed.success) return [];
+    return parsed.data.data.map((b) => ({
+      id: b.id,
+      abbreviation: b.localized_abbreviation ?? b.abbreviation ?? String(b.id),
+    }));
   }
 
   /** Clear per-run caches so a fresh sync re-reads version metadata. */

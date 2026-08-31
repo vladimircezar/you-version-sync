@@ -159,6 +159,9 @@ class ConfirmModal extends Modal {
 }
 
 export class YouVersionSettingTab extends PluginSettingTab {
+  /** Populated on demand by "Load versions"; not persisted. */
+  private availableVersions: Array<{ id: number; abbreviation: string }> = [];
+
   constructor(
     app: App,
     private readonly plugin: YouVersionSyncPlugin,
@@ -332,11 +335,15 @@ export class YouVersionSettingTab extends PluginSettingTab {
           }),
       );
 
-    new Setting(el)
+    // Highlights are stored per Bible version, so the wrong id here means a sync
+    // that finds nothing and says nothing. Offer the real list rather than
+    // asking the user to know a magic number.
+    const versionSetting = new Setting(el)
       .setName("Preferred Bible version")
       .setDesc(
-        "Numeric YouVersion version id. Highlights are stored per version, so changing this " +
-          "starts a separate set of notes rather than replacing the existing ones.",
+        "Highlights are stored per version: a highlight made in one version is invisible to a " +
+          "query against another. If a sync finds nothing, this is the first thing to check - " +
+          "run 'Diagnose highlight access' to find out which version yours are in.",
       )
       .addText((text) =>
         text.setValue(String(this.settings.bibleId)).onChange(async (value) => {
@@ -347,6 +354,43 @@ export class YouVersionSettingTab extends PluginSettingTab {
           }
         }),
       );
+
+    if (this.plugin.tokens.isConnected()) {
+      versionSetting.addButton((btn) =>
+        btn.setButtonText("Load versions").onClick(async () => {
+          btn.setDisabled(true).setButtonText("Loading...");
+          try {
+            const versions = await this.plugin.listBibleVersions();
+            if (versions.length === 0) {
+              new Notice("No Bible versions were returned for this App Key.");
+              return;
+            }
+            this.availableVersions = versions;
+            this.display();
+          } catch (err) {
+            new Notice(`Could not load versions: ${String(err)}`, 8000);
+          } finally {
+            btn.setDisabled(false).setButtonText("Load versions");
+          }
+        }),
+      );
+    }
+
+    if (this.availableVersions.length > 0) {
+      new Setting(el)
+        .setName("Available versions")
+        .setDesc("Versions your App Key can read. Picking one sets the id above.")
+        .addDropdown((dd) => {
+          for (const v of this.availableVersions)
+            dd.addOption(String(v.id), `${v.abbreviation} (${v.id})`);
+          dd.setValue(String(this.settings.bibleId));
+          dd.onChange(async (value) => {
+            this.settings.bibleId = Number(value);
+            await this.save();
+            this.display();
+          });
+        });
+    }
 
     new Setting(el)
       .setName("Download verse text")
@@ -537,6 +581,18 @@ export class YouVersionSettingTab extends PluginSettingTab {
         btn.setButtonText("Copy sanitized diagnostics").onClick(async () => {
           await navigator.clipboard.writeText(this.plugin.buildDiagnosticsReport());
           new Notice("Sanitized diagnostics copied to the clipboard.");
+        }),
+      );
+
+    new Setting(el)
+      .setName("Diagnose highlight access")
+      .setDesc(
+        "Sync found nothing? Ask the API about one verse you know you highlighted, and find out " +
+          "whether the Bible version is wrong or something else is.",
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Run probe").onClick(() => {
+          void this.plugin.diagnoseHighlights();
         }),
       );
 

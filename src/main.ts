@@ -6,7 +6,7 @@
  * the only network calls are the documented GET endpoints plus the OAuth token
  * exchange.
  */
-import { Notice, Platform, Plugin, requestUrl } from "obsidian";
+import { ButtonComponent, Modal, Notice, Platform, Plugin, Setting, requestUrl } from "obsidian";
 
 import {
   DEFAULT_SETTINGS,
@@ -33,6 +33,7 @@ import { FOLDERS, joinPath } from "./markdown/paths";
 import { DiagnosticLogger } from "./diagnostics/logger";
 import { buildDiagnostics } from "./diagnostics/report";
 import { redactError } from "./security/redact";
+import { formatProbeReport, probeHighlightAccess } from "./diagnostics/probe";
 
 interface PluginData {
   settings: YouVersionSyncSettings;
@@ -154,6 +155,14 @@ export default class YouVersionSyncPlugin extends Plugin {
       name: "Disconnect account",
       callback: () => {
         void this.disconnectAccount();
+      },
+    });
+
+    this.addCommand({
+      id: "diagnose-highlights",
+      name: "Diagnose highlight access",
+      callback: () => {
+        void this.diagnoseHighlights();
       },
     });
 
@@ -525,6 +534,47 @@ export default class YouVersionSyncPlugin extends Plugin {
     );
   }
 
+  /**
+   * Ask about one verse the user knows is highlighted, and report what the API
+   * actually says. This is the tool for "the sync found nothing": it separates
+   * a wrong Bible version from a chapter-query that does not behave as
+   * documented, which need opposite fixes.
+   */
+  async diagnoseHighlights(): Promise<void> {
+    const provider = this.buildProvider();
+    const availability = await provider.availability();
+    if (!this.tokens.isConnected()) {
+      new Notice(`YouVersion Sync: ${availability.reason}`, 10000);
+      return;
+    }
+
+    new PromptModal(
+      this.app,
+      "Diagnose highlight access",
+      "Enter one verse you know you have highlighted, in USFM form. The probe asks the API " +
+        "about it directly and reports what comes back.",
+      "JHN.3.16",
+      async (reference) => {
+        const notice = new Notice("Probing highlight access...", 0);
+        try {
+          const report = await probeHighlightAccess(provider, reference, this.settings.bibleId);
+          notice.hide();
+          const text = formatProbeReport(report);
+          this.logger.info(`Probe conclusion: ${report.conclusion}`);
+          new ResultModal(this.app, "Highlight access probe", text).open();
+        } catch (err) {
+          notice.hide();
+          new Notice(`YouVersion Sync: ${redactError(err)}`, 12000);
+        }
+      },
+    ).open();
+  }
+
+  /** Bible versions this App Key can see, for the settings picker. */
+  async listBibleVersions(): Promise<Array<{ id: number; abbreviation: string }>> {
+    return this.buildProvider().listBibles();
+  }
+
   buildDiagnosticsReport(): string {
     const summary = this.syncState.lastSummary;
     const records = Object.values(this.syncState.records);
@@ -649,3 +699,82 @@ const obsidianTransport: Transport = async (req: HttpRequest): Promise<HttpRespo
 
   return { status: response.status, headers, text: response.text ?? "" };
 };
+
+/** Single-field prompt. Used to ask for a verse reference. */
+class PromptModal extends Modal {
+  private value = "";
+
+  constructor(
+    app: import("obsidian").App,
+    private readonly heading: string,
+    private readonly body: string,
+    private readonly placeholder: string,
+    private readonly onSubmit: (value: string) => void | Promise<void>,
+  ) {
+    super(app);
+  }
+
+  override onOpen(): void {
+    this.titleEl.setText(this.heading);
+    this.contentEl.createEl("p", { text: this.body });
+
+    new Setting(this.contentEl).setName("Verse").addText((text) =>
+      text
+        .setPlaceholder(this.placeholder)
+        .onChange((v) => {
+          this.value = v.trim();
+        })
+        .inputEl.addEventListener("keydown", (event: KeyboardEvent) => {
+          if (event.key === "Enter") this.submit();
+        }),
+    );
+
+    const row = this.contentEl.createDiv({ cls: "modal-button-container" });
+    new ButtonComponent(row).setButtonText("Cancel").onClick(() => this.close());
+    new ButtonComponent(row)
+      .setButtonText("Run probe")
+      .setCta()
+      .onClick(() => this.submit());
+  }
+
+  private submit(): void {
+    const value = this.value || this.placeholder;
+    this.close();
+    void this.onSubmit(value);
+  }
+
+  override onClose(): void {
+    this.contentEl.empty();
+  }
+}
+
+/** Read-only result view with a copy button. */
+class ResultModal extends Modal {
+  constructor(
+    app: import("obsidian").App,
+    private readonly heading: string,
+    private readonly text: string,
+  ) {
+    super(app);
+  }
+
+  override onOpen(): void {
+    this.titleEl.setText(this.heading);
+    const pre = this.contentEl.createEl("pre", { cls: "youversion-sync-report" });
+    pre.setText(this.text);
+
+    const row = this.contentEl.createDiv({ cls: "modal-button-container" });
+    new ButtonComponent(row)
+      .setButtonText("Copy")
+      .setCta()
+      .onClick(async () => {
+        await navigator.clipboard.writeText(this.text);
+        new Notice("Copied.");
+      });
+    new ButtonComponent(row).setButtonText("Close").onClick(() => this.close());
+  }
+
+  override onClose(): void {
+    this.contentEl.empty();
+  }
+}

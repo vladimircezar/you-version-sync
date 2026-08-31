@@ -63,6 +63,18 @@ export const ApiBibleSchema = z.object({
 });
 export type ApiBible = z.infer<typeof ApiBibleSchema>;
 
+/** `GET /v1/bibles?language_ranges[]=eng` */
+export const ApiBibleListSchema = z.object({
+  data: z.array(
+    z.object({
+      id: z.number().int(),
+      abbreviation: z.string().optional(),
+      localized_abbreviation: z.string().optional(),
+      title: z.string().optional(),
+    }),
+  ),
+});
+
 /** `GET /v1/bibles/{id}/passages/{passage_id}?format=text` */
 export const ApiPassageSchema = z.object({
   passage_id: z.string().optional(),
