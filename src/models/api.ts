@@ -21,6 +21,12 @@ export type ApiHighlight = z.infer<typeof ApiHighlightSchema>;
 
 export const ApiHighlightCollectionSchema = z.object({
   data: z.array(ApiHighlightSchema),
+  /**
+   * Present in YouVersion's own SDK wire schema for this endpoint, though the
+   * published OpenAPI omits it. A chapter with many highlights can therefore be
+   * paginated, and ignoring this token silently drops rows.
+   */
+  next_page_token: z.string().nullable().optional(),
 });
 export type ApiHighlightCollection = z.infer<typeof ApiHighlightCollectionSchema>;
 

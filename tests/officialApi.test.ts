@@ -344,3 +344,91 @@ describe("verse text", () => {
     expect(requests.filter((r) => r.url.includes("/passages/"))).toHaveLength(1);
   });
 });
+
+describe("pagination", () => {
+  /**
+   * The highlights endpoint returns next_page_token - YouVersion's own SDK
+   * reads it, though the published OpenAPI omits it. Ignoring it silently
+   * dropped rows from any densely highlighted chapter.
+   */
+  function pagedProvider(pages: Array<{ data: unknown[]; next_page_token?: string | null }>) {
+    const urls: string[] = [];
+    let call = 0;
+    const http = new ResilientHttp({
+      transport: async (req) => {
+        urls.push(req.url);
+        if (req.url.includes("/index")) {
+          return { status: 200, headers: {}, text: JSON.stringify(BIBLE_INDEX) };
+        }
+        if (/\/v1\/bibles\/3034$/.test(req.url)) {
+          return { status: 200, headers: {}, text: JSON.stringify(BIBLE_META) };
+        }
+        const page = pages[Math.min(call++, pages.length - 1)];
+        return { status: 200, headers: {}, text: JSON.stringify(page) };
+      },
+      policy: { ...DEFAULT_RETRY_POLICY, minIntervalMs: 0, maxAttempts: 1 },
+      sleepFn: async () => undefined,
+    });
+    const tokens = new TokenStore({
+      persistence: "session",
+      save: async () => undefined,
+      load: async () => null,
+    });
+    const provider = new OfficialApiProvider({
+      http,
+      oauth: {} as never,
+      tokens,
+      appKey: "k",
+      bibleId: 3034,
+      scanScope: { scope: "whole", books: [] },
+      downloadVerseText: false,
+    });
+    return { provider, tokens, urls };
+  }
+
+  it("follows next_page_token and returns every row", async () => {
+    const { provider, tokens, urls } = pagedProvider([
+      {
+        data: [{ bible_id: 3034, passage_id: "JHN.3.16", color: "44aa44" }],
+        next_page_token: "p2",
+      },
+      {
+        data: [{ bible_id: 3034, passage_id: "JHN.3.17", color: "ffdd00" }],
+        next_page_token: null,
+      },
+    ]);
+    await connect(tokens);
+
+    const items = await provider.fetchChapterHighlights(
+      { chapterUsfm: "JHN.3", bibleId: 3034 },
+      {},
+    );
+    expect(items.map((i) => i.usfm)).toEqual(["JHN.3.16", "JHN.3.17"]);
+    expect(urls.some((u) => u.includes("page_token=p2"))).toBe(true);
+  });
+
+  it("stops after one page when there is no token", async () => {
+    const { provider, tokens, urls } = pagedProvider([
+      { data: [{ bible_id: 3034, passage_id: "JHN.3.16", color: "44aa44" }] },
+    ]);
+    await connect(tokens);
+    await provider.fetchChapterHighlights({ chapterUsfm: "JHN.3", bibleId: 3034 }, {});
+    expect(urls.filter((u) => u.includes("/v1/highlights"))).toHaveLength(1);
+  });
+
+  it("does not spin forever if the server keeps returning the same token", async () => {
+    const { provider, tokens, urls } = pagedProvider([
+      {
+        data: [{ bible_id: 3034, passage_id: "JHN.3.16", color: "44aa44" }],
+        next_page_token: "loop",
+      },
+    ]);
+    await connect(tokens);
+    const items = await provider.fetchChapterHighlights(
+      { chapterUsfm: "JHN.3", bibleId: 3034 },
+      {},
+    );
+    expect(urls.filter((u) => u.includes("/v1/highlights")).length).toBeLessThanOrEqual(20);
+    expect(items.length).toBeGreaterThan(0);
+  });
+});

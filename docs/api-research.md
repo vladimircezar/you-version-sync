@@ -162,6 +162,26 @@ a 302 to `/auth/callback`, so the browser performs the navigation itself
 - **Granted permissions** can be re-checked via `GET /v1/apps/{app_id}/permissions`, whose response
   enum is `["highlights"]` — independent confirmation that no other permission exists.
 
+## What the shipped SDK adds
+
+`@youversion/platform-core` v2.12.0 was inspected as a second source, because it is the vendor's
+own working client rather than documentation about one. Three things it settles:
+
+- **Both highlight parameters really are required.** The docs *website* renders
+  `GetHighlightsOptions` with `version_id?` and `passage_id?` — both optional — which would imply a
+  list-all-highlights call. The shipped `highlights.d.ts` says otherwise: both required, with the
+  comment *"The API requires both a Bible version and a passage scope."* The website's optional
+  markers are stale. **There is no list endpoint**, and a scan is unavoidable.
+- **Chapter-level passage ids are supported**, per the type's own docstring (see open question 3).
+- **The highlights response is paginated.** The SDK's wire schema includes
+  `next_page_token: string | nullable | optional`, which the published OpenAPI omits entirely. A
+  client that ignores it silently drops rows from any chapter with more highlights than fit one
+  page. This plugin follows the token (`src/providers/officialApi.ts`).
+
+The SDK also exposes `assertUsableVersion`, but that is a *client-side* filter over app-supplied
+allow/deny lists — not a licence check against the API — so it says nothing about whether a given
+version's highlights are reachable.
+
 ## Rate limits
 
 **No numeric rate limit is published**, but one is real and reachable: a probe issuing ~30
@@ -209,12 +229,11 @@ These are recorded rather than guessed at. None of them block the highlights mil
    endpoint, discards tokens locally on disconnect and tells the user to remove the app from their
    YouVersion account to revoke access fully. **Unverified against a live server.**
 
-3. **Chapter-level `passage_id` on `GET /v1/highlights`.** The parameter is documented as accepting
-   "verse or chapter USFM format" and the response as "a color per verse without ranges", which
-   together imply a chapter query returns every highlighted verse in that chapter. The whole scan
-   design rests on this. It has **not been verified against a live account** (no App Key was
-   available during development). This is the single most important thing to confirm during manual
-   testing — see `docs/manual-testing.md`, step 5.
+3. **Chapter-level `passage_id` on `GET /v1/highlights`.** *Largely resolved.* YouVersion's own
+   published SDK (`@youversion/platform-core` v2.12.0) types the parameter as
+   *"Passage identifier in verse or chapter USFM format (e.g., `"JHN.3"` or `"JHN.3.16"`)"* — the
+   vendor's shipped code, not just prose, says a chapter query is supported. Still not confirmed
+   empirically against a live account; manual testing step 5 remains the check.
 
 4. **Rate limits** are unpublished, so the defaults are guesses on the conservative side.
 

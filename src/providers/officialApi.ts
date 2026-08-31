@@ -36,6 +36,9 @@ import { CAPABILITIES } from "./capabilities";
 import { fnv1a64 } from "../sync/hash";
 import { NEW_TESTAMENT_BOOKS, canonChapters } from "../markdown/canon";
 
+/** Safety valve: a chapter cannot legitimately need more pages than this. */
+const MAX_HIGHLIGHT_PAGES = 20;
+
 export interface ScanScopeConfig {
   scope: "whole" | "new_testament" | "old_testament" | "books";
   /** USFM book ids, used when `scope` is `books`. */
@@ -179,39 +182,56 @@ export class OfficialApiProvider implements Provider, HighlightSource {
   }
 
   async fetchChapterHighlights(task: ChapterTask, ctx: ProviderContext): Promise<HighlightItem[]> {
-    const query = new URLSearchParams({
-      bible_id: String(task.bibleId),
-      passage_id: task.chapterUsfm,
-    });
+    // The response is paginated: YouVersion's own SDK reads `next_page_token`
+    // from this endpoint even though the published OpenAPI omits it. Following
+    // it is what stops a densely highlighted chapter losing rows.
+    const rows: Array<{ bible_id: number; passage_id: string; color: string }> = [];
+    let pageToken: string | undefined;
+    let pages = 0;
 
-    const body = await this.get(`/v1/highlights?${query.toString()}`, ctx);
-    // 204 means the chapter simply has no highlights - a normal, common answer.
-    if (body === null) return [];
+    do {
+      const query = new URLSearchParams({
+        bible_id: String(task.bibleId),
+        passage_id: task.chapterUsfm,
+      });
+      if (pageToken) query.set("page_token", pageToken);
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(body);
-    } catch {
-      throw new HttpError(
-        200,
-        "The highlights endpoint returned a malformed JSON body.",
-        "/v1/highlights",
-      );
-    }
+      const body = await this.get(`/v1/highlights?${query.toString()}`, ctx);
+      // 204 means the chapter simply has no highlights - a normal, common answer.
+      if (body === null) break;
 
-    const collection = ApiHighlightCollectionSchema.safeParse(parsed);
-    if (!collection.success) {
-      throw new HttpError(
-        200,
-        "The highlights response did not match the documented schema.",
-        "/v1/highlights",
-      );
-    }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(body);
+      } catch {
+        throw new HttpError(
+          200,
+          "The highlights endpoint returned a malformed JSON body.",
+          "/v1/highlights",
+        );
+      }
+
+      const collection = ApiHighlightCollectionSchema.safeParse(parsed);
+      if (!collection.success) {
+        throw new HttpError(
+          200,
+          "The highlights response did not match the documented schema.",
+          "/v1/highlights",
+        );
+      }
+
+      rows.push(...collection.data.data);
+      pageToken = collection.data.next_page_token ?? undefined;
+      pages += 1;
+      // A server that keeps returning the same token must not spin forever.
+    } while (pageToken && pages < MAX_HIGHLIGHT_PAGES);
+
+    if (rows.length === 0) return [];
 
     const meta = await this.bibleMetadata(ctx);
     const items: HighlightItem[] = [];
 
-    for (const raw of collection.data.data) {
+    for (const raw of rows) {
       // Guard against a chapter query echoing verses from elsewhere.
       if (raw.bible_id !== task.bibleId) continue;
 
